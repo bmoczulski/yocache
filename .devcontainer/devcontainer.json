@@ -1,0 +1,29 @@
+{
+  // yocache dev container. The Go toolchain is defined once in ./Dockerfile
+  // and shared by VS Code, the devcontainer CLI, and plain docker/podman runs.
+  //
+  // The container MUST run as the host user's uid/gid (see README
+  // "Development"). Use a rootless engine (rootless Podman or Docker), which
+  // maps the container user to your host user automatically: this leaves no
+  // root-owned files behind and keeps git's ownership check on the
+  // bind-mounted .git happy, so `go build` VCS stamping works.
+  "name": "yocache",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "forwardPorts": [6768],
+  // HOME and the Go caches live under ./.cache; make sure they exist.
+  "postCreateCommand": "mkdir -p .cache/home .cache/go",
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.Go"],
+      "settings": {
+        "go.toolsManagement.autoUpdate": false,
+        "go.gopath": "/workspace/.cache/go"
+      }
+    }
+  }
+}

@@ -3,6 +3,9 @@
 /dist/
 /bin/
 
+# Containerised toolchain caches (HOME, GOPATH, build/module cache)
+/.cache/
+
 # Local data the daemon may write (blob store, sqlite/duckdb files)
 /var/
 *.sqlite

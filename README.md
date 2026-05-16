@@ -45,19 +45,64 @@ Key decisions:
 Build sequencing: single-node sstate+DL server → mDNS → peer gossip + pull →
 hash-equiv → full federation.
 
-## Build & run
+## Development
 
-Requires Go 1.26+ (development/CI only — not on deployment targets).
+No local Go install is needed. The whole toolchain lives in a container
+defined once in `.devcontainer/Dockerfile` (Go 1.26) and consumed three
+equivalent ways.
+
+**Requirement:** the container must run with your host uid/gid, so nothing it
+writes is root-owned and git's ownership check on `.git` passes (keeping
+`go build` VCS stamping working). Use a rootless engine, or pass `--user`
+explicitly with rootful Docker — see below.
+
+### 1. VS Code
+
+Open the folder → **Reopen in Container**. Terminal, build, debug and `gopls`
+all run inside. Use a rootless engine so the container user maps to you
+automatically; for Podman set `"dev.containers.dockerPath": "podman"` in VS
+Code settings.
+
+### 2. devcontainer CLI (IDE-agnostic)
 
 ```sh
-go run ./cmd/yocache --addr :6768
-curl localhost:6768/healthz
+npx @devcontainers/cli up   --workspace-folder .
+npx @devcontainers/cli exec --workspace-folder . go build ./...
 ```
+
+### 3. Plain docker / podman (quick fixes, CI, new contributors)
+
+```sh
+# Build the toolchain image once (context = .devcontainer)
+docker build -t yocache-dev .devcontainer          # or: podman build ...
+
+# Compile — Docker (rootful): pass your uid/gid explicitly
+docker run --rm -it --user "$(id -u):$(id -g)" \
+  -v "$PWD":/workspace -w /workspace yocache-dev go build ./...
+
+# Compile — rootless Podman: uid maps automatically
+podman run --rm -it --userns=keep-id \
+  -v "$PWD":/workspace -w /workspace yocache-dev go build ./...
+
+# Run the daemon — Docker (rootful)
+docker run --rm -it --user "$(id -u):$(id -g)" -p 6768:6768 \
+  -v "$PWD":/workspace -w /workspace yocache-dev \
+  go run ./cmd/yocache --addr :6768
+
+# Run the daemon — rootless Podman
+podman run --rm -it --userns=keep-id -p 6768:6768 \
+  -v "$PWD":/workspace -w /workspace yocache-dev \
+  go run ./cmd/yocache --addr :6768
+```
+
+Then `curl localhost:6768/healthz`. Module and build caches persist in
+`./.cache` (git-ignored), so repeated builds are fast.
 
 ## Repository layout
 
 ```
-cmd/yocache/   daemon entrypoint
+.devcontainer/   containerised Go toolchain (dev / CLI / CI)
+cmd/yocache/     daemon entrypoint
 ```
 
 More packages are added as functionality lands.
