@@ -1,0 +1,20 @@
+# Build output
+/yocache
+/dist/
+/bin/
+
+# Local data the daemon may write (blob store, sqlite/duckdb files)
+/var/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.duckdb
+
+# Local config overrides
+yocache.local.toml
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
