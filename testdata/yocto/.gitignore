@@ -1,0 +1,18 @@
+# Heavy Yocto build output / persistent caches — never committed.
+# Unanchored so they match under example-project/ too.
+build/
+cache/
+*.lock
+
+# Layer repos kas checks out into example-project/ (split-repo wrynose),
+# plus any stray manual poky clone.
+example-project/bitbake/
+example-project/openembedded-core/
+example-project/meta-yocto/
+example-project/poky/
+
+# Runtime / personal files not meant for the repo
+example-project/.toaster-venv/
+example-project/.claude/
+example-project/.kas_shell_history
+example-project/*.e

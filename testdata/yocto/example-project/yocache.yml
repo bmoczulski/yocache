@@ -1,0 +1,38 @@
+# base.yml + yocache mirror wiring. Only two mirror pointers differ from
+# pristine, so all captured traffic is attributable to the cache wiring.
+header:
+  version: 14
+  includes:
+    - base.yml
+
+# No `url`: this is the repo that holds this kas file (the yocache repo,
+# = git toplevel). kas adds meta-yocache/ from it as a bblayer, so the
+# canonical meta-yocache/classes/yocache.bbclass is the only copy — no
+# hard-link, no BBPATH hack, and it's container-visible under /repo.
+repos:
+  yocache:
+    layers:
+      meta-yocache:
+
+local_conf_header:
+  yocache: |
+    YOCACHE_URL = "http://localhost:6768"
+    YOCACHE_SKIP_POST = "1"
+    YOCACHE_LOG_LIMIT = "0"
+
+    # Point bitbake's hash-equivalence at yocache, spoken over WebSocket on the
+    # same port. Must live here (cooker reads BB_HASHSERVE), not in the bbclass.
+    # ws:// (not unix://) also dodges the spurious "no sstate will match" sanity
+    # warning. localhost works because kas runs with --network=host.
+    BB_HASHSERVE = "ws://localhost:6768/hashequiv"
+
+    # "toaster" is necessary for Yocache to harvest MissedSstate events
+    INHERIT += "toaster"
+
+    # The juice!
+    INHERIT += "yocache"
+
+    # Toaster server suggests it (and I like it too)
+    INHERIT += "buildhistory"
+    BUILDHISTORY_COMMIT = "1"
+

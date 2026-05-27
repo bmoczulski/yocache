@@ -1,0 +1,47 @@
+# Pristine, minimal Yocto build — no yocache wiring.
+#
+# Reproducible reference: Wrynose (Yocto 6.0), qemux86-64, console-only
+# core-image-minimal, run via kas-container for a clean, pinned environment.
+#
+# Wrynose dropped the monolithic `poky` combo repo. 6.0 only exists as three
+# separate repos, pinned exactly as bitbake-setup's registry does it
+# (bitbake/default-registry/configurations/poky-wrynose.conf.json):
+#   bitbake            -> branch 2.18
+#   openembedded-core  -> branch wrynose   (provides `meta`)
+#   meta-yocto         -> branch wrynose   (provides meta-poky, meta-yocto-bsp)
+# kas drives this split layout fine; it finds bitbake in the `bitbake` repo and
+# oe-init-build-env in openembedded-core.
+header:
+  version: 14            # bump if kas rejects it; kas prints the supported range
+
+machine: qemux86-64
+distro: poky
+target: core-image-minimal
+
+repos:
+  bitbake:
+    url: https://git.openembedded.org/bitbake
+    branch: "2.18"       # quoted: YAML would read 2.18 as a float
+    layers:
+      .: disabled        # clone bitbake, but it is NOT a bblayer
+                          # (kas still finds bin/bitbake here)
+  openembedded-core:
+    url: https://git.openembedded.org/openembedded-core
+    branch: wrynose
+    layers:
+      meta:
+  meta-yocto:
+    url: https://git.yoctoproject.org/meta-yocto
+    branch: wrynose
+    layers:
+      meta-poky:         # provides the `poky` distro
+      meta-yocto-bsp:    # matches the official registry layer set
+
+local_conf_header:
+  minimal: |
+    # Console-only: no graphics stack.
+    DISTRO_FEATURES:remove = "x11 wayland vulkan opengl"
+    # Persist DL/sstate outside the throwaway build dir so iterating on the
+    # logging server doesn't re-pull the world from upstream every run.
+    DL_DIR = "${TOPDIR}/../cache/downloads"
+    SSTATE_DIR = "${TOPDIR}/../cache/sstate"
