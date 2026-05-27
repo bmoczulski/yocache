@@ -60,6 +60,25 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 	final := filepath.Join(u.dir, name)
 
+	// Require If-None-Match so callers declare their intent (RFC 6585 §3 /
+	// RFC 7232 §6). Accepting unconditional PUTs would risk silently overwriting
+	// a complete blob — wrong for a content-addressed store where URL presence
+	// already implies identity (sstate URLs encode the unihash).
+	if r.Header.Get("If-None-Match") == "" {
+		u.log.Warn("upload: missing If-None-Match",
+			"kind", u.kind, "name", name, "remote", r.RemoteAddr)
+		http.Error(w, "If-None-Match required", http.StatusPreconditionRequired)
+		return
+	}
+	// If-None-Match: * means "only create if absent". Check before doing any
+	// filesystem work so we don't race to mkdir for a blob we'll reject.
+	if _, statErr := os.Stat(final); statErr == nil {
+		u.log.Info("upload: already exists, skipping",
+			"kind", u.kind, "name", name, "remote", r.RemoteAddr)
+		w.WriteHeader(http.StatusPreconditionFailed)
+		return
+	}
+
 	// A nested name (sstate's <aa>/<bb>/<file>) needs its parent created before
 	// we can stage there. filepath.Join cleaned the name, and safeBlobName
 	// guaranteed it can't climb out of u.dir, so this only ever makes dirs under
@@ -118,8 +137,9 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot persist upload", http.StatusInternalServerError)
 		return
 	}
-	// Atomic publish. rename(2) replaces any existing blob of the same name in
-	// one step, so a re-upload is idempotent and a reader never sees a gap.
+	// Atomic publish. rename(2) replaces the name in one step so a reader
+	// never observes a partially-written file (the If-None-Match check above
+	// prevents us reaching this point for blobs that already exist).
 	if err := os.Rename(tmp, final); err != nil {
 		u.log.Error("upload: rename failed", "tmp", tmp, "final", final, "err", err, "remote", r.RemoteAddr)
 		http.Error(w, "cannot publish upload", http.StatusInternalServerError)
