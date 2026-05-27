@@ -7,8 +7,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +19,49 @@ import (
 	"syscall"
 	"time"
 )
+
+// buildReport mirrors the JSON sent by yocache.bbclass. The class POSTs one
+// report per event (BuildStarted/BuildCompleted/MetadataEvent), not an
+// end-of-build aggregate, so every report carries the event name plus a
+// stringified dump of the raw bitbake event.
+//
+// Type and Metadata are only populated for bb.event.MetadataEvent. Metadata
+// is left raw because its shape depends on the MetadataEvent subtype:
+// MissedSstate carries {"missed": [...], "found": [...]}, others carry
+// whatever they carry.
+type buildReport struct {
+	Event     string  `json:"event"`
+	TS        float64 `json:"ts"`
+	BuildName string  `json:"build_name"`
+	Machine   string  `json:"machine"`
+	Distro    string  `json:"distro"`
+
+	// Provenance — best-effort identity gathered out-of-band by the bbclass so
+	// builds can be grouped by user/machine even under a shared-uid kas
+	// container, where USER/uid/pid all collapse. Any field may be empty; none
+	// is sufficient alone, combined they're compelling. See
+	// notes/build-identity.md.
+	Hostname     string `json:"hostname"`
+	IP           string `json:"ip"`
+	MachineID    string `json:"machine_id"`
+	GitUserName  string `json:"git_user_name"`
+	GitUserEmail string `json:"git_user_email"`
+	User         string `json:"user"`
+
+	// Raw so any payload shape decodes (the bbclass sends an object here); we
+	// don't inspect it yet.
+	Dump json.RawMessage `json:"dump"`
+
+	Type     string          `json:"type"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+// sstateMeta is the metadata payload of a MissedSstate MetadataEvent. Each
+// entry is [fn, task, hash, sstatefile]; we only count them for now.
+type sstateMeta struct {
+	Missed [][]any `json:"missed"`
+	Found  [][]any `json:"found"`
+}
 
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
@@ -69,6 +114,62 @@ func main() {
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
 	// hashequiv.go for the protocol and the (thin, in-memory) store.
 	mux.HandleFunc("/hashequiv", newHashEquiv(store, log).handle)
+
+	// Build telemetry sink. yocache.bbclass POSTs one JSON report per
+	// bitbake event. We just decode and log it for now — no persistence
+	// yet; this proves the round trip and shows the real payload shape.
+	mux.HandleFunc("POST /api/build-report", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		if err != nil {
+			log.Warn("build report: read failed", "err", err, "remote", r.RemoteAddr)
+			http.Error(w, "read error", http.StatusBadRequest)
+			return
+		}
+		var rep buildReport
+		if err := json.Unmarshal(body, &rep); err != nil {
+			log.Warn("build report: bad json", "err", err, "remote", r.RemoteAddr)
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+
+		attrs := []any{
+			"event", rep.Event,
+			"build_name", rep.BuildName,
+			"machine", rep.Machine,
+			"distro", rep.Distro,
+			"hostname", rep.Hostname,
+			"ip", rep.IP,
+			"user", rep.User,
+		}
+		// Provenance that's often absent (shared-uid container, no git config,
+		// no host machine-id mounted) — only log what's present, to keep the
+		// line readable. See notes/build-identity.md.
+		if rep.MachineID != "" {
+			attrs = append(attrs, "machine_id", rep.MachineID)
+		}
+		if rep.GitUserName != "" {
+			attrs = append(attrs, "git_user_name", rep.GitUserName)
+		}
+		if rep.GitUserEmail != "" {
+			attrs = append(attrs, "git_user_email", rep.GitUserEmail)
+		}
+		if rep.Type != "" {
+			attrs = append(attrs, "type", rep.Type)
+		}
+		// Only MissedSstate carries the missed/found shape; for other
+		// MetadataEvents the unmarshal just yields zero counts, which we skip.
+		if len(rep.Metadata) > 0 {
+			var s sstateMeta
+			if err := json.Unmarshal(rep.Metadata, &s); err != nil {
+				log.Warn("build report: bad metadata", "err", err, "type", rep.Type, "remote", r.RemoteAddr)
+			} else if len(s.Missed) > 0 || len(s.Found) > 0 {
+				attrs = append(attrs, "missed", len(s.Missed), "found", len(s.Found))
+			}
+		}
+		attrs = append(attrs, "remote", r.RemoteAddr)
+		log.Info("build report", attrs...)
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	// Artifact cache: the build PUTs blobs (build-side uploader) and bitbake's
 	// SSTATE_MIRRORS / PREMIRRORS GET them back. The GET pattern also serves HEAD
