@@ -72,7 +72,19 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 	// If-None-Match: * means "only create if absent". Check before doing any
 	// filesystem work so we don't race to mkdir for a blob we'll reject.
-	if _, statErr := os.Stat(final); statErr == nil {
+	if stored, statErr := os.Stat(final); statErr == nil {
+		// A size mismatch for the same content-addressed name is a conflict:
+		// two objects claiming the same identity. Flag it with 409 so the
+		// server can surface the incident rather than silently discarding it.
+		if r.ContentLength >= 0 && stored.Size() != r.ContentLength {
+			u.log.Warn("upload: conflict — size mismatch",
+				"kind", u.kind, "name", name,
+				"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+				"remote", r.RemoteAddr)
+			http.Error(w, "conflict: stored blob has different size", http.StatusConflict)
+			return
+		}
+		// Same size (or unknown incoming length): assume identical and skip.
 		u.log.Info("upload: already exists, skipping",
 			"kind", u.kind, "name", name, "remote", r.RemoteAddr)
 		w.WriteHeader(http.StatusPreconditionFailed)
