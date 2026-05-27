@@ -13,21 +13,45 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
 
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
+	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// Operational state lives in a single SQLite file. Today it backs only the
+	// hash-equivalence store; inventory/peer/conflict tables join it later. Make
+	// the parent dir so the default "var/" path works out of the box.
+	if dir := filepath.Dir(*dbPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Error("cannot create database directory", "dir", dir, "err", err)
+			os.Exit(1)
+		}
+	}
+	store, err := openHashEquivStore(*dbPath)
+	if err != nil {
+		log.Error("cannot open database", "path", *dbPath, "err", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+	log.Info("hashequiv store ready", "path", *dbPath)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
+
+	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
+	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
+	// hashequiv.go for the protocol and the (thin, in-memory) store.
+	mux.HandleFunc("/hashequiv", newHashEquiv(store, log).handle)
 
 	srv := &http.Server{
 		Addr:              *addr,
