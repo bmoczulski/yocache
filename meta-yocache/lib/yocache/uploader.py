@@ -201,10 +201,11 @@ class Uploader:
         try:
             item = json.loads(line)
             kind, path, name = item["kind"], item["path"], item["name"]
+            checksums = item.get("checksums") or {}
         except (ValueError, KeyError, TypeError) as exc:
             _warn("ignoring malformed notify %r: %s" % (line[:200], exc))
             return
-        self._queue.put((kind, path, name))
+        self._queue.put((kind, path, name, checksums))
 
     def _worker_loop(self):
         while True:
@@ -216,7 +217,7 @@ class Uploader:
             finally:
                 self._queue.task_done()
 
-    def _upload(self, kind, path, name):
+    def _upload(self, kind, path, name, checksums):
         url = "%s/%s/%s" % (self.base_url, kind, urllib.parse.quote(name))
         if self.skip:
             _note("dry-run, would PUT %s (%s)" % (url, path))
@@ -302,15 +303,22 @@ def stop(d):
 
 # -- module-level API (worker hooks) --------------------------------------
 
-def notify(sock_path, kind, path, name):
+def notify(sock_path, kind, path, name, checksums=None):
     """Worker-side: hand one artifact to the cooker uploader. Fail-soft.
 
     A missing/refused socket means uploads are off or not up yet — that's a
     normal condition, so it's logged quietly (note), never as a build warning.
+
+    checksums is an optional {algo: hex_value} dict of already-verified
+    checksums (e.g. from SRC_URI recipe flags).  Only non-empty values are
+    forwarded; if the dict is empty or None the server will compute its own.
     """
     if not sock_path:
         return
-    msg = json.dumps({"kind": kind, "path": path, "name": name}).encode("utf-8")
+    payload = {"kind": kind, "path": path, "name": name}
+    if checksums:
+        payload["checksums"] = checksums
+    msg = json.dumps(payload).encode("utf-8")
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(5.0)
