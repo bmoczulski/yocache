@@ -13,6 +13,9 @@
 *.sqlite-shm
 *.duckdb
 
+# Dev-session log captures
+*.log
+
 # Local config overrides
 yocache.local.toml
 
