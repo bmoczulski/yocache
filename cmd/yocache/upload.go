@@ -73,22 +73,34 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	// If-None-Match: * means "only create if absent". Check before doing any
 	// filesystem work so we don't race to mkdir for a blob we'll reject.
 	if stored, statErr := os.Stat(final); statErr == nil {
-		// A size mismatch for the same content-addressed name is a conflict:
-		// two objects claiming the same identity. Flag it with 409 so the
-		// server can surface the incident rather than silently discarding it.
 		if r.ContentLength >= 0 && stored.Size() != r.ContentLength {
-			u.log.Warn("upload: conflict — size mismatch",
-				"kind", u.kind, "name", name,
-				"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
-				"remote", r.RemoteAddr)
-			http.Error(w, "conflict: stored blob has different size", http.StatusConflict)
+			if r.ContentLength > stored.Size() && isGitMirrorTarball(name) {
+				// git2_* and gitshallow_* tarballs grow monotonically: the
+				// upstream repo accumulates commits, making later snapshots
+				// strictly larger. A larger incoming file is a fresher seed —
+				// let it fall through and replace the stored one.
+				u.log.Info("upload: replacing with larger git mirror tarball",
+					"kind", u.kind, "name", name,
+					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+					"remote", r.RemoteAddr)
+			} else {
+				// All other size mismatches are a conflict: two objects
+				// claiming the same identity, or a git tarball that is
+				// inexplicably smaller than what we already hold.
+				u.log.Warn("upload: conflict — size mismatch",
+					"kind", u.kind, "name", name,
+					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+					"remote", r.RemoteAddr)
+				http.Error(w, "conflict: stored blob has different size", http.StatusConflict)
+				return
+			}
+		} else {
+			// Same size (or unknown incoming length): assume identical and skip.
+			u.log.Info("upload: already exists, skipping",
+				"kind", u.kind, "name", name, "remote", r.RemoteAddr)
+			w.WriteHeader(http.StatusPreconditionFailed)
 			return
 		}
-		// Same size (or unknown incoming length): assume identical and skip.
-		u.log.Info("upload: already exists, skipping",
-			"kind", u.kind, "name", name, "remote", r.RemoteAddr)
-		w.WriteHeader(http.StatusPreconditionFailed)
-		return
 	}
 
 	// A nested name (sstate's <aa>/<bb>/<file>) needs its parent created before
@@ -205,6 +217,16 @@ func (u *blobUploader) miss(w http.ResponseWriter, r *http.Request, name string)
 	u.log.Info("cache miss", "kind", u.kind, "name", name,
 		"method", r.Method, "ua", r.UserAgent(), "remote", r.RemoteAddr)
 	http.NotFound(w, r)
+}
+
+// isGitMirrorTarball reports whether name is a bitbake git mirror tarball
+// (git2_*.tar.gz or gitshallow_*.tar.gz). These tarballs are snapshots of a
+// bare git clone and grow monotonically as the upstream repo accumulates
+// commits, so a larger incoming file supersedes a smaller stored one rather
+// than indicating a conflict. Other VCS fetchers (hg, svn, …) may warrant
+// the same treatment but are not yet verified — see TODO.
+func isGitMirrorTarball(name string) bool {
+	return strings.HasPrefix(name, "git2_") || strings.HasPrefix(name, "gitshallow_")
 }
 
 // safeBlobName accepts a relative path that may be nested and rejects anything
