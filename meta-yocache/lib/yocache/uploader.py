@@ -62,6 +62,18 @@ _SENTINEL = object()
 # How long stop() waits for in-flight uploads to finish before giving up.
 _DRAIN_TIMEOUT = 120.0
 
+# Maps bitbake checksum algorithm names (as stored in ud.*_expected attributes)
+# to the X-Content-* request headers we attach to every PUT that carries them.
+# Values are already-verified hex digests; the server can use them later for
+# data-consistency checks without recomputing the hash itself.
+_CHECKSUM_HEADERS = {
+    "sha256": "X-Content-SHA256",
+    "sha1":   "X-Content-SHA1",
+    "md5":    "X-Content-MD5",
+    "sha384": "X-Content-SHA384",
+    "sha512": "X-Content-SHA512",
+}
+
 # Cooker-side singleton + the lock guarding its lifecycle transitions.
 _uploader = None
 _lock = threading.Lock()
@@ -229,20 +241,30 @@ class Uploader:
             return
         try:
             with open(path, "rb") as fh:
+                hdrs = {
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(size),
+                    # Only write if the server doesn't already hold this
+                    # resource. For sstate the URL encodes the unihash, so
+                    # URL existence implies identical content; for DL the
+                    # filename is stable enough that the same guard applies.
+                    # Server responds 412 Precondition Failed when the
+                    # resource exists (RFC 7232 §6); we treat that as a
+                    # successful no-op, not an error.
+                    "If-None-Match": "*",
+                }
+                # Attach any already-verified checksums from bitbake so the
+                # server can validate what it receives without re-hashing.
+                # We trust bitbake's verification; we never compute these
+                # ourselves here.  Missing keys mean the server computes
+                # its own hash and marks it "locally computed" for audit.
+                for algo, value in (checksums or {}).items():
+                    hdr = _CHECKSUM_HEADERS.get(algo)
+                    if hdr and value:
+                        hdrs[hdr] = value
                 req = urllib.request.Request(
                     url, data=fh, method="PUT",
-                    headers={
-                        "Content-Type": "application/octet-stream",
-                        "Content-Length": str(size),
-                        # Only write if the server doesn't already hold this
-                        # resource. For sstate the URL encodes the unihash, so
-                        # URL existence implies identical content; for DL the
-                        # filename is stable enough that the same guard applies.
-                        # Server responds 412 Precondition Failed when the
-                        # resource exists (RFC 7232 §6); we treat that as a
-                        # successful no-op, not an error.
-                        "If-None-Match": "*",
-                    })
+                    headers=hdrs)
                 with urllib.request.urlopen(req, timeout=300) as resp:
                     resp.read()
             _note("PUT %s (%d bytes)" % (url, size))
