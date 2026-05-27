@@ -1,0 +1,7 @@
+{
+    "files.watcherExclude": {
+        "${workspaceFolder}/testdata/yocto/example-project/build/**": true,
+        "${workspaceFolder}/testdata/yocto/example-project/cache/**": true,
+        "${workspaceFolder}/.cache/**": true,
+    }
+}
