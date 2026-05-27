@@ -141,9 +141,11 @@ func TestPutIfNoneMatchExistingBlob(t *testing.T) {
 		t.Fatalf("initial put status = %d, want 201", rec.Code)
 	}
 
-	// Second PUT with If-None-Match: * must be rejected.
+	// Second PUT of the same bytes must be rejected with 412 (already have it).
+	// Use identical content so the size matches and we get 412, not 409 —
+	// the conflict path (size mismatch) is covered by TestPutConflictSizeMismatch.
 	rec = httptest.NewRecorder()
-	u.put(rec, putReq(t, "sstate", name, "different content"))
+	u.put(rec, putReq(t, "sstate", name, original))
 	if rec.Code != http.StatusPreconditionFailed {
 		t.Fatalf("re-put status = %d, want 412", rec.Code)
 	}
@@ -155,6 +157,39 @@ func TestPutIfNoneMatchExistingBlob(t *testing.T) {
 	}
 	if string(got) != original {
 		t.Errorf("stored blob = %q, want %q", got, original)
+	}
+}
+
+// TestPutConflictSizeMismatch verifies that a PUT whose Content-Length differs
+// from a stored blob of the same name returns 409 Conflict. This matters most
+// for /downloads/ where filenames are not content-addressed (unlike sstate,
+// where the unihash is embedded in the path and a name collision implies a
+// hash-function break).
+func TestPutConflictSizeMismatch(t *testing.T) {
+	u := testUploader(t, "downloads")
+	name := "git2_github.com.poky.tar.gz"
+	original := "original content"
+
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", name, original))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("initial put status = %d, want 201", rec.Code)
+	}
+
+	// Re-upload with a different Content-Length must be flagged as a conflict.
+	rec = httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", name, "different — longer content"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("conflict put status = %d, want 409", rec.Code)
+	}
+
+	// The stored blob must be unchanged.
+	got, err := os.ReadFile(filepath.Join(u.dir, name))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("stored blob = %q, want %q (conflict must not overwrite)", got, original)
 	}
 }
 
