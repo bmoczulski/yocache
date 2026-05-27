@@ -28,6 +28,7 @@ import queue
 import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -232,13 +233,26 @@ class Uploader:
                     headers={
                         "Content-Type": "application/octet-stream",
                         "Content-Length": str(size),
+                        # Only write if the server doesn't already hold this
+                        # resource. For sstate the URL encodes the unihash, so
+                        # URL existence implies identical content; for DL the
+                        # filename is stable enough that the same guard applies.
+                        # Server responds 412 Precondition Failed when the
+                        # resource exists (RFC 7232 §6); we treat that as a
+                        # successful no-op, not an error.
+                        "If-None-Match": "*",
                     })
                 with urllib.request.urlopen(req, timeout=300) as resp:
                     resp.read()
             _note("PUT %s (%d bytes)" % (url, size))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 412:
+                _note("skipped %s (server already has it)" % url)
+            else:
+                # 501 from the current server stub lands here too — expected
+                # until storage is implemented; keep it quiet (note, not warn).
+                _note("PUT %s failed (%s)" % (url, exc))
         except Exception as exc:
-            # 501 from the current server stub lands here too — expected until
-            # storage is implemented; keep it quiet (note, not warn).
             _note("PUT %s failed (%s)" % (url, exc))
 
 
