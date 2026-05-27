@@ -21,6 +21,8 @@ import (
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
 	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
+	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
+	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -42,6 +44,21 @@ func main() {
 	defer store.Close()
 	log.Info("hashequiv store ready", "path", *dbPath)
 
+	// Blob stores for the two writable path spaces (DL mirror + sstate). Each
+	// creates its dir and sweeps staging files left by an upload an earlier run
+	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
+	// fatal — upload to that space would be permanently broken.
+	downloads, err := newBlobUploader(*downloadsDir, "downloads", log)
+	if err != nil {
+		log.Error("cannot init downloads store", "err", err)
+		os.Exit(1)
+	}
+	sstate, err := newBlobUploader(*sstateDir, "sstate", log)
+	if err != nil {
+		log.Error("cannot init sstate store", "err", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -52,6 +69,47 @@ func main() {
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
 	// hashequiv.go for the protocol and the (thin, in-memory) store.
 	mux.HandleFunc("/hashequiv", newHashEquiv(store, log).handle)
+
+	// Artifact cache: the build PUTs blobs (build-side uploader) and bitbake's
+	// SSTATE_MIRRORS / PREMIRRORS GET them back. The GET pattern also serves HEAD
+	// (bitbake HEADs an sstate object before fetching). Method-typed patterns are
+	// more specific than the catch-all "/", so they win for these paths; a GET
+	// that finds nothing returns 404, the same void outcome as before, so a miss
+	// still falls back to upstream.
+	//
+	// Serving a stored object is unconditionally correct. The sstate "claim vs
+	// available" gating from notes/sstate-upload-hook.md lives on the hashequiv
+	// side (don't advertise a unihash until its object has landed), not here —
+	// follow-up, built on this read side rather than blocking it.
+	mux.HandleFunc("PUT /sstate/", sstate.put)
+	mux.HandleFunc("PUT /downloads/", downloads.put)
+	mux.HandleFunc("GET /sstate/", sstate.get)
+	mux.HandleFunc("GET /downloads/", downloads.get)
+
+	// Any method on the blob spaces that is not GET/HEAD/PUT has no defined
+	// semantics — tell the caller explicitly rather than silently 404ing.
+	methodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
+		log.Warn("method not allowed",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote", r.RemoteAddr,
+		)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+	mux.HandleFunc("/sstate/", methodNotAllowed)
+	mux.HandleFunc("/downloads/", methodNotAllowed)
+
+	// Catch-all: anything not matched above is an unrecognised path.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Info("unmatched request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"query", r.URL.RawQuery,
+			"ua", r.UserAgent(),
+			"remote", r.RemoteAddr,
+		)
+		http.Error(w, "not found", http.StatusNotFound)
+	})
 
 	srv := &http.Server{
 		Addr:              *addr,
