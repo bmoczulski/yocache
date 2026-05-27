@@ -161,13 +161,11 @@ func TestPutIfNoneMatchExistingBlob(t *testing.T) {
 }
 
 // TestPutConflictSizeMismatch verifies that a PUT whose Content-Length differs
-// from a stored blob of the same name returns 409 Conflict. This matters most
-// for /downloads/ where filenames are not content-addressed (unlike sstate,
-// where the unihash is embedded in the path and a name collision implies a
-// hash-function break).
+// from a stored blob of the same name returns 409 Conflict for plain downloads
+// (content-addressed by URL, so a size mismatch is a real conflict).
 func TestPutConflictSizeMismatch(t *testing.T) {
 	u := testUploader(t, "downloads")
-	name := "git2_github.com.poky.tar.gz"
+	name := "busybox-1.36.1.tar.bz2" // plain download, not a git mirror tarball
 	original := "original content"
 
 	rec := httptest.NewRecorder()
@@ -190,6 +188,70 @@ func TestPutConflictSizeMismatch(t *testing.T) {
 	}
 	if string(got) != original {
 		t.Errorf("stored blob = %q, want %q (conflict must not overwrite)", got, original)
+	}
+}
+
+// TestPutGitTarballLargerReplaces verifies that a git2_* or gitshallow_*
+// tarball with a larger Content-Length replaces the stored one (the upstream
+// repo has grown — the larger file is a fresher snapshot).
+func TestPutGitTarballLargerReplaces(t *testing.T) {
+	for _, name := range []string{"git2_github.com.poky.tar.gz", "gitshallow_github.com.poky.tar.gz"} {
+		t.Run(name, func(t *testing.T) {
+			u := testUploader(t, "downloads")
+			older := "older and shorter"
+			newer := "newer and definitely longer content"
+
+			rec := httptest.NewRecorder()
+			u.put(rec, putReq(t, "downloads", name, older))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("initial put status = %d, want 201", rec.Code)
+			}
+
+			rec = httptest.NewRecorder()
+			u.put(rec, putReq(t, "downloads", name, newer))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("larger re-put status = %d, want 201", rec.Code)
+			}
+
+			got, err := os.ReadFile(filepath.Join(u.dir, name))
+			if err != nil {
+				t.Fatalf("reading stored blob: %v", err)
+			}
+			if string(got) != newer {
+				t.Errorf("stored blob = %q, want newer content %q", got, newer)
+			}
+		})
+	}
+}
+
+// TestPutGitTarballSmallerConflicts verifies that a git2_* tarball that is
+// smaller than the stored one still returns 409: a shrinking git repo is
+// suspicious (force-push / history rewrite) and should not silently replace
+// a more complete snapshot.
+func TestPutGitTarballSmallerConflicts(t *testing.T) {
+	u := testUploader(t, "downloads")
+	name := "git2_github.com.poky.tar.gz"
+	larger := "a longer blob that was stored first"
+
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", name, larger))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("initial put status = %d, want 201", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", name, "short"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("smaller re-put status = %d, want 409", rec.Code)
+	}
+
+	// The larger blob must be preserved.
+	got, err := os.ReadFile(filepath.Join(u.dir, name))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+	if string(got) != larger {
+		t.Errorf("stored blob = %q, want original larger content", got)
 	}
 }
 
