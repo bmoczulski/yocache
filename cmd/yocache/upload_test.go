@@ -1,12 +1,16 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func testUploader(t *testing.T, kind string) *blobUploader {
@@ -16,6 +20,15 @@ func testUploader(t *testing.T, kind string) *blobUploader {
 		t.Fatalf("newBlobUploader: %v", err)
 	}
 	return u
+}
+
+// putReq builds a PUT request with If-None-Match: * already set.
+func putReq(t *testing.T, kind, name, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/"+kind+"/"+name, strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("If-None-Match", "*")
+	return req
 }
 
 func TestSafeBlobName(t *testing.T) {
@@ -49,17 +62,15 @@ func TestBlobPutGetRoundTrip(t *testing.T) {
 
 	put := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPut, "/sstate/"+name, strings.NewReader(body))
-		req.ContentLength = int64(len(body))
-		u.put(rec, req)
+		u.put(rec, putReq(t, "sstate", name, body))
 		return rec
 	}
 	if rec := put(); rec.Code != http.StatusCreated {
 		t.Fatalf("put status = %d, want 201", rec.Code)
 	}
-	// Re-upload is idempotent (atomic rename over the existing blob).
-	if rec := put(); rec.Code != http.StatusCreated {
-		t.Fatalf("re-put status = %d, want 201", rec.Code)
+	// Re-upload of the same name is rejected: server already has the blob.
+	if rec := put(); rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("re-put status = %d, want 412", rec.Code)
 	}
 
 	// GET returns the bytes.
@@ -100,5 +111,91 @@ func TestPutRejectsTraversal(t *testing.T) {
 	u.put(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("traversal put status = %d, want 400", rec.Code)
+	}
+}
+
+// TestPutRequiresIfNoneMatch verifies that a PUT without the If-None-Match
+// header is rejected with 428 Precondition Required (RFC 6585 §3).
+func TestPutRequiresIfNoneMatch(t *testing.T) {
+	u := testUploader(t, "downloads")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/downloads/blob.tar.gz", strings.NewReader("data"))
+	req.ContentLength = 4
+	// Deliberately omit If-None-Match.
+	u.put(rec, req)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("status = %d, want 428", rec.Code)
+	}
+}
+
+// TestPutIfNoneMatchExistingBlob verifies that uploading a name that already
+// exists returns 412 Precondition Failed and leaves the stored blob untouched.
+func TestPutIfNoneMatchExistingBlob(t *testing.T) {
+	u := testUploader(t, "sstate")
+	name := "ab/cd/sstate:quilt-native:x86_64:1.0:r0:x86_64:14:abcd_do_compile.tar.zst"
+	original := "original content"
+
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "sstate", name, original))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("initial put status = %d, want 201", rec.Code)
+	}
+
+	// Second PUT with If-None-Match: * must be rejected.
+	rec = httptest.NewRecorder()
+	u.put(rec, putReq(t, "sstate", name, "different content"))
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("re-put status = %d, want 412", rec.Code)
+	}
+
+	// The stored blob must be unchanged.
+	got, err := os.ReadFile(filepath.Join(u.dir, name))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("stored blob = %q, want %q", got, original)
+	}
+}
+
+// TestPutInterruptedDiscardsPartial verifies that a client disconnecting
+// mid-upload leaves no staging dotfile and no partial blob committed.
+func TestPutInterruptedDiscardsPartial(t *testing.T) {
+	u := testUploader(t, "downloads")
+	name := "big.tar.gz"
+
+	// A reader that delivers a few bytes then returns an error, simulating a
+	// dropped connection.
+	body := io.MultiReader(
+		strings.NewReader("partial"),
+		iotest.ErrReader(errors.New("connection reset by peer")),
+	)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/downloads/"+name, body)
+	req.Header.Set("If-None-Match", "*")
+	req.ContentLength = 1024 // promise more bytes than we'll deliver
+	u.put(rec, req)
+
+	if rec.Code == http.StatusCreated {
+		t.Fatal("interrupted upload must not return 201")
+	}
+
+	// Walk the whole store: no dotfile staging remnant should remain.
+	err := filepath.WalkDir(u.dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			t.Errorf("staging file not cleaned up: %s", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking store: %v", err)
+	}
+
+	// The final blob must not have been committed.
+	if _, err := os.Stat(filepath.Join(u.dir, name)); err == nil {
+		t.Error("partial blob must not be committed to the store")
 	}
 }
