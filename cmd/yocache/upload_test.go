@@ -191,11 +191,17 @@ func TestPutConflictSizeMismatch(t *testing.T) {
 	}
 }
 
-// TestPutGitTarballLargerReplaces verifies that a git2_* or gitshallow_*
-// tarball with a larger Content-Length replaces the stored one (the upstream
-// repo has grown — the larger file is a fresher snapshot).
-func TestPutGitTarballLargerReplaces(t *testing.T) {
-	for _, name := range []string{"git2_github.com.poky.tar.gz", "gitshallow_github.com.poky.tar.gz"} {
+// TestPutGrowingVCSTarballLargerReplaces verifies that VCS mirror tarballs
+// whose names do not encode a revision (git2_*, gitshallow_*, hg_*, repo_*)
+// accept a larger upload and replace the stored snapshot.
+func TestPutGrowingVCSTarballLargerReplaces(t *testing.T) {
+	names := []string{
+		"git2_github.com.poky.tar.gz",
+		"gitshallow_github.com.poky.tar.gz",
+		"hg_mymodule_hg.example.com_.repos.project.tar.gz",
+		"repo_android.googlesource.com.platform.manifest_default.xml_main.tar.gz",
+	}
+	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			u := testUploader(t, "downloads")
 			older := "older and shorter"
@@ -224,11 +230,11 @@ func TestPutGitTarballLargerReplaces(t *testing.T) {
 	}
 }
 
-// TestPutGitTarballSmallerConflicts verifies that a git2_* tarball that is
-// smaller than the stored one still returns 409: a shrinking git repo is
-// suspicious (force-push / history rewrite) and should not silently replace
-// a more complete snapshot.
-func TestPutGitTarballSmallerConflicts(t *testing.T) {
+// TestPutGrowingVCSTarballSmallerConflicts verifies that a growing-VCS tarball
+// that is smaller than the stored one returns 409: a shrinking repo is
+// suspicious (force-push / history rewrite) and must not replace a more
+// complete snapshot.
+func TestPutGrowingVCSTarballSmallerConflicts(t *testing.T) {
 	u := testUploader(t, "downloads")
 	name := "git2_github.com.poky.tar.gz"
 	larger := "a longer blob that was stored first"
@@ -245,13 +251,42 @@ func TestPutGitTarballSmallerConflicts(t *testing.T) {
 		t.Fatalf("smaller re-put status = %d, want 409", rec.Code)
 	}
 
-	// The larger blob must be preserved.
 	got, err := os.ReadFile(filepath.Join(u.dir, name))
 	if err != nil {
 		t.Fatalf("reading stored blob: %v", err)
 	}
 	if string(got) != larger {
 		t.Errorf("stored blob = %q, want original larger content", got)
+	}
+}
+
+// TestPutContentAddressedVCSTarballConflicts verifies that VCS tarballs whose
+// names embed a revision (svn, perforce, clearcase) are treated as
+// content-addressed and any size mismatch is still a 409 Conflict.
+func TestPutContentAddressedVCSTarballConflicts(t *testing.T) {
+	// These filenames mirror the real bitbake output patterns. The revision
+	// is part of the name, so same-name + different-size = genuine conflict.
+	names := []string{
+		"busybox_git.buildroot.net_git_busybox.git_abc1234_0.tar.gz", // svn pattern
+		"depot.example.com_.tools_mymod_12345.tar.gz",                // perforce pattern
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			u := testUploader(t, "downloads")
+			original := "original content"
+
+			rec := httptest.NewRecorder()
+			u.put(rec, putReq(t, "downloads", name, original))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("initial put status = %d, want 201", rec.Code)
+			}
+
+			rec = httptest.NewRecorder()
+			u.put(rec, putReq(t, "downloads", name, "different — longer content"))
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("re-put status = %d, want 409", rec.Code)
+			}
+		})
 	}
 }
 

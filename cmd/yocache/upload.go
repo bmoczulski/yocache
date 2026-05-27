@@ -74,18 +74,18 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	// filesystem work so we don't race to mkdir for a blob we'll reject.
 	if stored, statErr := os.Stat(final); statErr == nil {
 		if r.ContentLength >= 0 && stored.Size() != r.ContentLength {
-			if r.ContentLength > stored.Size() && isGitMirrorTarball(name) {
-				// git2_* and gitshallow_* tarballs grow monotonically: the
-				// upstream repo accumulates commits, making later snapshots
-				// strictly larger. A larger incoming file is a fresher seed —
-				// let it fall through and replace the stored one.
-				u.log.Info("upload: replacing with larger git mirror tarball",
+			if r.ContentLength > stored.Size() && isGrowingVCSTarball(name) {
+				// VCS mirror tarballs whose names don't encode a revision grow
+				// monotonically as the upstream repository accumulates history.
+				// A larger incoming file is a fresher snapshot — let it fall
+				// through and replace the stored one.
+				u.log.Info("upload: replacing with larger VCS mirror tarball",
 					"kind", u.kind, "name", name,
 					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
 					"remote", r.RemoteAddr)
 			} else {
 				// All other size mismatches are a conflict: two objects
-				// claiming the same identity, or a git tarball that is
+				// claiming the same identity, or a VCS tarball that is
 				// inexplicably smaller than what we already hold.
 				u.log.Warn("upload: conflict — size mismatch",
 					"kind", u.kind, "name", name,
@@ -219,14 +219,32 @@ func (u *blobUploader) miss(w http.ResponseWriter, r *http.Request, name string)
 	http.NotFound(w, r)
 }
 
-// isGitMirrorTarball reports whether name is a bitbake git mirror tarball
-// (git2_*.tar.gz or gitshallow_*.tar.gz). These tarballs are snapshots of a
-// bare git clone and grow monotonically as the upstream repo accumulates
-// commits, so a larger incoming file supersedes a smaller stored one rather
-// than indicating a conflict. Other VCS fetchers (hg, svn, …) may warrant
-// the same treatment but are not yet verified — see TODO.
-func isGitMirrorTarball(name string) bool {
-	return strings.HasPrefix(name, "git2_") || strings.HasPrefix(name, "gitshallow_")
+// isGrowingVCSTarball reports whether name is a VCS mirror tarball whose
+// content grows monotonically as the upstream repository accumulates history,
+// meaning a larger incoming file is a fresher snapshot and should replace a
+// smaller stored one rather than being treated as a conflict.
+//
+// Growing (no revision in filename — URL-derived name only):
+//   - git2_*        bitbake git fetcher, full bare-clone tarball
+//   - gitshallow_*  bitbake git fetcher, shallow-clone tarball
+//   - hg_*          bitbake hg fetcher; same structure and guard as git
+//   - repo_*        Android repo fetcher; includes branch, not a pinned hash
+//
+// NOT growing (revision is embedded in the filename — content-addressed):
+//   - svn:      <module>_<host>_<path>_<revision>_<pegrev>.tar.gz
+//   - perforce: <host>_<path>_<module>_<revision>.tar.gz
+//   - clearcase: <identifier>.tar.gz (identifier includes label/revision)
+//
+// The "not growing" assumption for svn/perforce/clearcase is based on source
+// inspection; real-world builds may yet prove it wrong — treat any 409 reports
+// for those as a signal to revisit.
+func isGrowingVCSTarball(name string) bool {
+	for _, pfx := range []string{"git2_", "gitshallow_", "hg_", "repo_"} {
+		if strings.HasPrefix(name, pfx) {
+			return true
+		}
+	}
+	return false
 }
 
 // safeBlobName accepts a relative path that may be nested and rejects anything
