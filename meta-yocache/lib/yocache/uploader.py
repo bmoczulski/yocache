@@ -220,10 +220,11 @@ class Uploader:
             item = json.loads(line)
             kind, path, name = item["kind"], item["path"], item["name"]
             checksums = item.get("checksums") or {}
+            recipe_meta = item.get("recipe_meta") or {}
         except (ValueError, KeyError, TypeError) as exc:
             _warn("ignoring malformed notify %r: %s" % (line[:200], exc))
             return
-        self._queue.put((kind, path, name, checksums))
+        self._queue.put((kind, path, name, checksums, recipe_meta))
 
     def _worker_loop(self):
         while True:
@@ -235,7 +236,7 @@ class Uploader:
             finally:
                 self._queue.task_done()
 
-    def _upload(self, kind, path, name, checksums):
+    def _upload(self, kind, path, name, checksums, recipe_meta=None):
         url = "%s/%s/%s" % (self.base_url, kind, urllib.parse.quote(name))
         if self.skip:
             _note("dry-run, would PUT %s (%s)" % (url, path))
@@ -269,6 +270,9 @@ class Uploader:
                     if hdr and value:
                         hdrs[hdr] = value
                 for var, value in self.build_meta.items():
+                    if value:
+                        hdrs["X-BitBake-var-" + var] = value
+                for var, value in (recipe_meta or {}).items():
                     if value:
                         hdrs["X-BitBake-var-" + var] = value
                 req = urllib.request.Request(
@@ -335,7 +339,7 @@ def stop(d):
 
 # -- module-level API (worker hooks) --------------------------------------
 
-def notify(sock_path, kind, path, name, checksums=None):
+def notify(sock_path, kind, path, name, checksums=None, recipe_meta=None):
     """Worker-side: hand one artifact to the cooker uploader. Fail-soft.
 
     A missing/refused socket means uploads are off or not up yet — that's a
@@ -344,12 +348,17 @@ def notify(sock_path, kind, path, name, checksums=None):
     checksums is an optional {algo: hex_value} dict of already-verified
     checksums (e.g. from SRC_URI recipe flags).  Only non-empty values are
     forwarded; if the dict is empty or None the server will compute its own.
+
+    recipe_meta is an optional {var: value} dict of recipe-level bitbake
+    variables (e.g. PN, PV) forwarded to the server as X-BitBake-var-* headers.
     """
     if not sock_path:
         return
     payload = {"kind": kind, "path": path, "name": name}
     if checksums:
         payload["checksums"] = checksums
+    if recipe_meta:
+        payload["recipe_meta"] = recipe_meta
     msg = json.dumps(payload).encode("utf-8")
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
