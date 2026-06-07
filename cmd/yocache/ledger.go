@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -17,14 +16,18 @@ import (
 // entry types are added by defining a new details struct and a new Record*
 // method — no schema migration, no format change.
 //
-// A sync.Mutex serialises concurrent appends from HTTP handler goroutines.
+// A dedicated drain goroutine owns the file descriptor; handler goroutines
+// send pre-marshaled lines to a buffered channel and return immediately.
+// The channel absorbs bursts without blocking callers; if it is full the entry
+// is dropped with a warning rather than stalling a build request.
 // flock is not needed: yocache is a single binary; all writers share the same
 // process. If multi-server federation ever needs a shared ledger, the right
 // path is SQLite (already planned for inventory state), not flock over JSONL.
 type Ledger struct {
-	mu  sync.Mutex
-	f   *os.File
-	log *slog.Logger
+	ch   chan []byte
+	done chan struct{}
+	f    *os.File
+	log  *slog.Logger
 }
 
 // ledgerEntry is the on-wire shape of every ledger line.
@@ -42,18 +45,39 @@ func openLedger(path string, log *slog.Logger) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Ledger{f: f, log: log}, nil
+	l := &Ledger{
+		ch:   make(chan []byte, 4096),
+		done: make(chan struct{}),
+		f:    f,
+		log:  log,
+	}
+	go l.drain()
+	return l, nil
 }
 
-// Close flushes and closes the underlying file.
+// drain is the sole writer to the file. It runs until ch is closed, then
+// closes done so Close can unblock and shut down cleanly.
+func (l *Ledger) drain() {
+	defer close(l.done)
+	for b := range l.ch {
+		if _, err := l.f.Write(b); err != nil {
+			l.log.Warn("ledger: write failed", "err", err)
+		}
+	}
+}
+
+// Close signals drain to stop, waits for it to flush all buffered entries,
+// then closes the file. Must be called only after all Record* callers have
+// returned (i.e. after the HTTP server has shut down).
 func (l *Ledger) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	close(l.ch)
+	<-l.done
 	return l.f.Close()
 }
 
-// write marshals entry to JSON and appends it as one line. Errors are logged
-// as warnings — a ledger failure must never stall or break a build request.
+// write marshals entry to JSON and enqueues it for the drain goroutine.
+// Errors are logged as warnings — a ledger failure must never stall or break
+// a build request. If the channel is full the entry is dropped.
 func (l *Ledger) write(entry ledgerEntry) {
 	b, err := json.Marshal(entry)
 	if err != nil {
@@ -61,11 +85,10 @@ func (l *Ledger) write(entry ledgerEntry) {
 		return
 	}
 	b = append(b, '\n')
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if _, err := l.f.Write(b); err != nil {
-		l.log.Warn("ledger: write failed", "type", entry.Type, "err", err)
+	select {
+	case l.ch <- b:
+	default:
+		l.log.Warn("ledger: channel full, entry dropped", "type", entry.Type)
 	}
 }
 
