@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -440,6 +442,71 @@ func TestPutQuotaExceeded(t *testing.T) {
 	}
 	if got := u.quota.Used(); got != 0 {
 		t.Errorf("used = %d after rejected upload, want 0", got)
+	}
+}
+
+func TestPutQuotaExceededLedgerEntry(t *testing.T) {
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+	ledger, err := openLedger(ledgerPath, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("openLedger: %v", err)
+	}
+
+	qt := &quotaTracker{limit: 4}
+	u, err := newBlobUploader(t.TempDir(), "downloads",
+		slog.New(slog.NewTextHandler(io.Discard, nil)), ledger, nil, qt)
+	if err != nil {
+		t.Fatalf("newBlobUploader: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", "big.tar.gz", "12345")) // 5 bytes > 4 limit
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("status = %d, want 507", rec.Code)
+	}
+
+	ledger.Close()
+
+	f, err := os.Open(ledgerPath)
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	defer f.Close()
+
+	var entry struct {
+		Type    string `json:"type"`
+		Details struct {
+			Kind          string `json:"kind"`
+			Path          string `json:"path"`
+			LimitBytes    int64  `json:"limit_bytes"`
+			IncomingBytes int64  `json:"incoming_bytes"`
+		} `json:"details"`
+	}
+	found := false
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
+			t.Fatalf("unmarshal ledger line: %v", err)
+		}
+		if entry.Type == "quota.exceeded" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no quota.exceeded entry in ledger")
+	}
+	if entry.Details.Kind != "downloads" {
+		t.Errorf("kind = %q, want %q", entry.Details.Kind, "downloads")
+	}
+	if entry.Details.Path != "big.tar.gz" {
+		t.Errorf("path = %q, want %q", entry.Details.Path, "big.tar.gz")
+	}
+	if entry.Details.LimitBytes != 4 {
+		t.Errorf("limit_bytes = %d, want 4", entry.Details.LimitBytes)
+	}
+	if entry.Details.IncomingBytes != 5 {
+		t.Errorf("incoming_bytes = %d, want 5", entry.Details.IncomingBytes)
 	}
 }
 
