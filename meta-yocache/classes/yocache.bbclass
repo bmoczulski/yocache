@@ -467,6 +467,7 @@ python yocache_notify_sstate () {
             return
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
         sstate_dir = d.getVar("SSTATE_DIR")
+        recipe_meta = {"PN": d.getVar("PN"), "PV": d.getVar("PV")}
 
         def notify(p):
             # Upload under the SSTATE_DIR-relative path, NOT the bare basename:
@@ -479,7 +480,7 @@ python yocache_notify_sstate () {
             name = os.path.relpath(p, sstate_dir) if sstate_dir \
                 else os.path.basename(p)
             bb.note("yocache: notifying about sstate path: %s, name: %s" % (p, name))
-            uploader.notify(sock, "sstate", p, name)
+            uploader.notify(sock, "sstate", p, name, recipe_meta=recipe_meta)
 
         notify(path)
 
@@ -533,6 +534,7 @@ python yocache_notify_dl () {
         if not src_uri:
             return
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
+        recipe_meta = {"PN": d.getVar("PN"), "PV": d.getVar("PV")}
         fetcher = bb.fetch2.Fetch(src_uri, d)
         seen = set()
         # Bitbake stores recipe-declared checksums as ud.<algo>_expected after
@@ -557,7 +559,8 @@ python yocache_notify_dl () {
                     seen.add(cand)
                     cksums = localpath_checksums if cand == ud.localpath else {}
                     uploader.notify(sock, "downloads", cand,
-                                    os.path.basename(cand), cksums or None)
+                                    os.path.basename(cand), cksums or None,
+                                    recipe_meta=recipe_meta)
     except Exception as exc:
         bb.warn("yocache: dl upload notify failed: %s" % exc)
 }
