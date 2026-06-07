@@ -113,11 +113,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	ver := buildVersionInfo()
+	log.Info("yocache version", "version", ver.Version, "revision", ver.Revision, "modified", ver.Modified)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
+	mux.HandleFunc("GET /version", versionHandler(ver))
 
 	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
@@ -222,8 +226,11 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           mux,
+		Addr: *addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "yocache/"+ver.Version)
+			mux.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
