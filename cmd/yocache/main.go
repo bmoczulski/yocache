@@ -68,7 +68,8 @@ func main() {
 	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
 	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
 	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
-	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the append-only audit ledger (created if absent)")
+	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
+	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -98,16 +99,24 @@ func main() {
 	defer ledger.Close()
 	log.Info("ledger ready", "path", *ledgerPath)
 
+	accessLog, err := openLedger(*accessLogPath, log)
+	if err != nil {
+		log.Error("cannot open access log", "path", *accessLogPath, "err", err)
+		os.Exit(1)
+	}
+	defer accessLog.Close()
+	log.Info("access log ready", "path", *accessLogPath)
+
 	// Blob stores for the two writable path spaces (DL mirror + sstate). Each
 	// creates its dir and sweeps staging files left by an upload an earlier run
 	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
 	// fatal — upload to that space would be permanently broken.
-	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger)
+	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog)
 	if err != nil {
 		log.Error("cannot init downloads store", "err", err)
 		os.Exit(1)
 	}
-	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger)
+	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog)
 	if err != nil {
 		log.Error("cannot init sstate store", "err", err)
 		os.Exit(1)
