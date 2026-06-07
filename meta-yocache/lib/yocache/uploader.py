@@ -161,7 +161,7 @@ class Uploader:
 
         pending = self._queue.qsize()
         if pending:
-            _note("draining %d queued upload(s)" % pending)
+            _note("draining %d upload(s), up to %.0fs..." % (pending, timeout))
 
         # Retire workers and wait for them within a shared deadline.
         for _ in self._workers:
@@ -180,7 +180,7 @@ class Uploader:
             pass
         self._workers = []
         self.state = IDLE
-        _note("stopped")
+        _note("finished")
 
     def join(self, timeout=_DRAIN_TIMEOUT):
         """Wait for an in-progress drain to finish (used by the start guard)."""
