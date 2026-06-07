@@ -78,7 +78,11 @@ func (l *Ledger) Close() error {
 // write marshals entry to JSON and enqueues it for the drain goroutine.
 // Errors are logged as warnings — a ledger failure must never stall or break
 // a build request. If the channel is full the entry is dropped.
+// A nil receiver is a no-op so callers can pass nil for optional ledgers (e.g. tests).
 func (l *Ledger) write(entry ledgerEntry) {
+	if l == nil {
+		return
+	}
 	b, err := json.Marshal(entry)
 	if err != nil {
 		l.log.Warn("ledger: marshal failed", "type", entry.Type, "err", err)

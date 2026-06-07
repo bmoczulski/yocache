@@ -48,10 +48,15 @@ func (q *quotaTracker) seed(dirs ...string) {
 
 // reserve atomically claims net bytes of quota space using a CAS retry loop.
 // Returns false (and leaves used unchanged) if adding net would exceed the
-// limit. Returns true immediately when quota is unlimited or net <= 0.
+// limit. Always updates used — even when quota is unlimited — so release()
+// never produces a negative counter and used always reflects actual disk usage.
 // Callers must call release(net) if the upload subsequently fails.
 func (q *quotaTracker) reserve(net int64) bool {
-	if q.limit == 0 || net <= 0 {
+	if net <= 0 {
+		return true
+	}
+	if q.limit == 0 {
+		q.used.Add(net)
 		return true
 	}
 	for {
