@@ -162,6 +162,28 @@ func (l *Ledger) RecordArtifactMissed(kind, path, buildID string) {
 	})
 }
 
+// quotaExceededDetails is the details payload for quota.exceeded.
+type quotaExceededDetails struct {
+	Kind         string `json:"kind"`          // "sstate" or "downloads"
+	Path         string `json:"path"`          // artifact name that was rejected
+	LimitBytes   int64  `json:"limit_bytes"`   // configured quota
+	UsedBytes    int64  `json:"used_bytes"`    // bytes in use at rejection time
+	IncomingBytes int64 `json:"incoming_bytes"` // size of the rejected upload
+}
+
+// RecordQuotaExceeded records that a PUT was rejected because the storage
+// quota would have been exceeded (507 Insufficient Storage).
+func (l *Ledger) RecordQuotaExceeded(kind, path string, limit, used, incoming int64) {
+	l.write(ledgerEntry{
+		Ts:   time.Now().UTC(),
+		Type: "quota.exceeded",
+		Details: l.marshalDetails(quotaExceededDetails{
+			Kind: kind, Path: path,
+			LimitBytes: limit, UsedBytes: used, IncomingBytes: incoming,
+		}),
+	})
+}
+
 // artifactEvictedDetails is the details payload for artifact.evicted.
 // Not yet called — defined here as the extension point for eviction policy.
 type artifactEvictedDetails struct {

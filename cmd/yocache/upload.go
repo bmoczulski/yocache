@@ -192,6 +192,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 			"kind", u.kind, "name", name,
 			"quota_bytes", u.quota.limit, "used_bytes", u.quota.Used(),
 			"incoming_bytes", r.ContentLength, "remote", r.RemoteAddr)
+		u.ledger.RecordQuotaExceeded(u.kind, name, u.quota.limit, u.quota.Used(), r.ContentLength)
 		http.Error(w, "storage quota exceeded", http.StatusInsufficientStorage)
 		return
 	}
