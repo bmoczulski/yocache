@@ -79,6 +79,11 @@ _CHECKSUM_HEADERS = {
 # for audit trails, cache pruning by machine/distro, and stale-blob detection.
 _BUILD_META_VARS = ("BUILDNAME", "MACHINE", "DISTRO", "DISTRO_VERSION", "TARGET_ARCH")
 
+# Per-blob recipe context forwarded by the worker hooks as X-BitBake-var-*
+# headers. Lets the server group and prune blobs by recipe, version, and
+# architecture without re-parsing the artifact filename.
+_RECIPE_META_VARS = ("PN", "PV", "PR", "BPN", "SSTATE_PKGARCH")
+
 # Cooker-side singleton + the lock guarding its lifecycle transitions.
 _uploader = None
 _lock = threading.Lock()

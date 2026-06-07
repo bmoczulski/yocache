@@ -467,7 +467,7 @@ python yocache_notify_sstate () {
             return
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
         sstate_dir = d.getVar("SSTATE_DIR")
-        recipe_meta = {var: d.getVar(var) for var in ("PN", "PV", "PR", "BPN", "SSTATE_PKGARCH")}
+        recipe_meta = {var: d.getVar(var) for var in uploader._RECIPE_META_VARS}
 
         def notify(p):
             # Upload under the SSTATE_DIR-relative path, NOT the bare basename:
@@ -534,7 +534,7 @@ python yocache_notify_dl () {
         if not src_uri:
             return
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
-        recipe_meta = {var: d.getVar(var) for var in ("PN", "PV", "PR", "BPN", "SSTATE_PKGARCH")}
+        recipe_meta = {var: d.getVar(var) for var in uploader._RECIPE_META_VARS}
         fetcher = bb.fetch2.Fetch(src_uri, d)
         seen = set()
         # Bitbake stores recipe-declared checksums as ud.<algo>_expected after
