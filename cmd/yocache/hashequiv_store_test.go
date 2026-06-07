@@ -5,15 +5,20 @@ import (
 	"testing"
 )
 
-// newTestStore opens a throwaway store in the test's temp dir.
+// newTestStore opens a throwaway DB in the test's temp dir, applies migrations,
+// and returns a hashEquivStore backed by it. The DB is closed on test cleanup.
 func newTestStore(t *testing.T) *hashEquivStore {
 	t.Helper()
-	s, err := openHashEquivStore(filepath.Join(t.TempDir(), "test.sqlite"))
+	db, err := openOperationalDB(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("openHashEquivStore: %v", err)
+		t.Fatalf("openOperationalDB: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
-	return s
+	if err := migrateDB(db); err != nil {
+		db.Close()
+		t.Fatalf("migrateDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return &hashEquivStore{db: db}
 }
 
 func TestUnihashRoundTripAndFirstWriteWins(t *testing.T) {
@@ -88,24 +93,34 @@ func TestOuthashRoundTripAndFirstWriteWins(t *testing.T) {
 // TestPersistAcrossReopen is the whole point of the change: data written before a
 // restart is still in effect after one.
 func TestPersistAcrossReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "persist.sqlite")
+	path := filepath.Join(t.TempDir(), "persist.db")
 
-	s1, err := openHashEquivStore(path)
+	db1, err := openOperationalDB(path)
 	if err != nil {
 		t.Fatalf("open #1: %v", err)
 	}
+	if err := migrateDB(db1); err != nil {
+		db1.Close()
+		t.Fatalf("migrate #1: %v", err)
+	}
+	s1 := &hashEquivStore{db: db1}
 	if _, err := s1.insertUnihash("m", "task1", "uniA"); err != nil {
 		t.Fatalf("insertUnihash: %v", err)
 	}
-	if err := s1.Close(); err != nil {
+	if err := db1.Close(); err != nil {
 		t.Fatalf("close #1: %v", err)
 	}
 
-	s2, err := openHashEquivStore(path)
+	db2, err := openOperationalDB(path)
 	if err != nil {
 		t.Fatalf("open #2: %v", err)
 	}
-	defer s2.Close()
+	if err := migrateDB(db2); err != nil {
+		db2.Close()
+		t.Fatalf("migrate #2: %v", err)
+	}
+	defer db2.Close()
+	s2 := &hashEquivStore{db: db2}
 	u, ok, err := s2.getEquivalent("m", "task1")
 	if err != nil || !ok || u != "uniA" {
 		t.Fatalf("after reopen: got %q ok=%v err=%v, want uniA/true", u, ok, err)

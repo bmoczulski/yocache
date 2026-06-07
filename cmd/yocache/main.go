@@ -75,22 +75,26 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// Operational state lives in a single SQLite file. Today it backs only the
-	// hash-equivalence store; inventory/peer/conflict tables join it later. Make
-	// the parent dir so the default "var/" path works out of the box.
+	// Operational state lives in a single SQLite file shared by all stores.
+	// Make the parent dir so the default "var/" path works out of the box.
 	if dir := filepath.Dir(*dbPath); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Error("cannot create database directory", "dir", dir, "err", err)
 			os.Exit(1)
 		}
 	}
-	store, err := openHashEquivStore(*dbPath)
+	db, err := openOperationalDB(*dbPath)
 	if err != nil {
-		log.Error("cannot open database", "path", *dbPath, "err", err)
+		log.Error("cannot open operational db", "path", *dbPath, "err", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer db.Close()
+	if err := migrateDB(db); err != nil {
+		log.Error("cannot migrate operational db", "path", *dbPath, "err", err)
+		os.Exit(1)
+	}
 	log.Info("operational db ready", "path", *dbPath)
+	store := &hashEquivStore{db: db}
 
 	ledger, err := openLedger(*ledgerPath, log)
 	if err != nil {

@@ -20,65 +20,25 @@ package main
 // and the single writer coexist without explicit locking, so the Go-side mutex
 // the map store needed is gone. An in-memory read cache in front of this is a
 // deliberate follow-up — add it once we know how big entries get per build.
+//
+// The *sql.DB is opened and closed by main (db.go); this type is a pure
+// query-method carrier with no lifecycle responsibility of its own.
 
 import (
 	"database/sql"
 	"errors"
-	"fmt"
-
-	_ "modernc.org/sqlite"
 )
 
 // hashEquivStore is the SQLite-backed hash-equivalence database. database/sql's
 // connection pool plus SQLite WAL handle concurrent access; the type is safe for
-// use by many connection goroutines at once.
+// use by many goroutines at once.
 type hashEquivStore struct {
 	db *sql.DB
 }
 
-// hashEquivSchema is the table set, created idempotently on open.
-const hashEquivSchema = `
-CREATE TABLE IF NOT EXISTS unihashes (
-	method   TEXT NOT NULL,
-	taskhash TEXT NOT NULL,
-	unihash  TEXT NOT NULL,
-	PRIMARY KEY (method, taskhash)
-);
-CREATE INDEX IF NOT EXISTS unihashes_by_unihash ON unihashes (unihash);
-CREATE TABLE IF NOT EXISTS outhashes (
-	method   TEXT NOT NULL,
-	outhash  TEXT NOT NULL,
-	taskhash TEXT NOT NULL,
-	unihash  TEXT NOT NULL,
-	PRIMARY KEY (method, outhash)
-);`
-
-// openHashEquivStore opens (creating if absent) the SQLite database at path and
-// applies the schema. WAL + busy_timeout are set per-connection via the DSN so
-// they apply to every connection the pool opens. The caller owns Close.
-func openHashEquivStore(path string) (*hashEquivStore, error) {
-	dsn := "file:" + path +
-		"?_pragma=journal_mode(WAL)" +
-		"&_pragma=busy_timeout(5000)" +
-		"&_pragma=synchronous(NORMAL)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
-	}
-	// sql.Open is lazy; Ping forces a real connection so a bad path or DSN fails
-	// here rather than on the first request.
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("connect sqlite %q: %w", path, err)
-	}
-	if _, err := db.Exec(hashEquivSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("apply hashequiv schema: %w", err)
-	}
-	return &hashEquivStore{db: db}, nil
-}
-
-func (s *hashEquivStore) Close() error { return s.db.Close() }
+// DB returns the underlying connection pool so other stores (e.g. blobInventory)
+// can share the same SQLite file without opening a second connection.
+func (s *hashEquivStore) DB() *sql.DB { return s.db }
 
 // getEquivalent returns the unihash recorded for (method, taskhash). The bool is
 // false on a clean miss; an error is a real query failure, which callers degrade
