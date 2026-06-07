@@ -9,13 +9,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 )
 
 func testUploader(t *testing.T, kind string) *blobUploader {
 	t.Helper()
-	u, err := newBlobUploader(t.TempDir(), kind, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return testUploaderWithQuota(t, kind, 0)
+}
+
+func testUploaderWithQuota(t *testing.T, kind string, limit int64) *blobUploader {
+	t.Helper()
+	qt := &quotaTracker{limit: limit}
+	u, err := newBlobUploader(t.TempDir(), kind, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, qt)
 	if err != nil {
 		t.Fatalf("newBlobUploader: %v", err)
 	}
@@ -329,5 +336,194 @@ func TestPutInterruptedDiscardsPartial(t *testing.T) {
 	// The final blob must not have been committed.
 	if _, err := os.Stat(filepath.Join(u.dir, name)); err == nil {
 		t.Error("partial blob must not be committed to the store")
+	}
+}
+
+// --- quotaTracker unit tests ---
+
+func TestQuotaUnlimited(t *testing.T) {
+	q := &quotaTracker{limit: 0}
+	for range 3 {
+		if !q.reserve(1 << 30) {
+			t.Fatal("unlimited quota must always reserve")
+		}
+	}
+}
+
+func TestQuotaReserveFitsExactly(t *testing.T) {
+	q := &quotaTracker{limit: 100}
+	if !q.reserve(100) {
+		t.Fatal("reserve exactly at limit should succeed")
+	}
+	if got := q.Used(); got != 100 {
+		t.Errorf("used = %d, want 100", got)
+	}
+}
+
+func TestQuotaReserveExceedsLimit(t *testing.T) {
+	q := &quotaTracker{limit: 100}
+	if q.reserve(101) {
+		t.Fatal("reserve over limit must fail")
+	}
+	if got := q.Used(); got != 0 {
+		t.Errorf("used = %d after failed reserve, want 0", got)
+	}
+}
+
+func TestQuotaReservePartialThenFull(t *testing.T) {
+	q := &quotaTracker{limit: 10}
+	q.reserve(7)
+	// 7 used, 3 remaining — 4 bytes should be refused
+	if q.reserve(4) {
+		t.Error("reserve that would exceed limit must fail")
+	}
+	if got := q.Used(); got != 7 {
+		t.Errorf("used = %d, want 7 (failed reserve must not change counter)", got)
+	}
+}
+
+func TestQuotaReleaseRestoresSpace(t *testing.T) {
+	q := &quotaTracker{limit: 10}
+	q.reserve(10)
+	q.release(10)
+	if got := q.Used(); got != 0 {
+		t.Errorf("used = %d after release, want 0", got)
+	}
+	if !q.reserve(10) {
+		t.Error("quota should be fully available after release")
+	}
+}
+
+func TestQuotaSeed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "blob"), []byte("1234567890"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := &quotaTracker{limit: 100}
+	q.seed(dir)
+	if got := q.Used(); got != 10 {
+		t.Errorf("seeded used = %d, want 10", got)
+	}
+}
+
+func TestQuotaSeedExcludesDotfiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "blob"), []byte("hello"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".staging.tmp"), []byte("partial"), 0o644)
+	q := &quotaTracker{limit: 100}
+	q.seed(dir)
+	if got := q.Used(); got != 5 {
+		t.Errorf("seeded used = %d, want 5 (dotfiles excluded)", got)
+	}
+}
+
+// --- PUT integration tests ---
+
+func TestPutRequiresContentLength(t *testing.T) {
+	u := testUploader(t, "downloads")
+	req := httptest.NewRequest(http.MethodPut, "/downloads/blob.tar.gz", strings.NewReader("data"))
+	req.Header.Set("If-None-Match", "*")
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	u.put(rec, req)
+	if rec.Code != http.StatusLengthRequired {
+		t.Fatalf("status = %d, want 411", rec.Code)
+	}
+}
+
+func TestPutQuotaExceeded(t *testing.T) {
+	u := testUploaderWithQuota(t, "downloads", 4)
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", "big.tar.gz", "12345")) // 5 bytes > 4 limit
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("status = %d, want 507", rec.Code)
+	}
+	if got := u.quota.Used(); got != 0 {
+		t.Errorf("used = %d after rejected upload, want 0", got)
+	}
+}
+
+func TestPutQuotaFitsUpdatesCounter(t *testing.T) {
+	u := testUploaderWithQuota(t, "downloads", 10)
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "downloads", "small.tar.gz", "hello")) // 5 bytes
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	if got := u.quota.Used(); got != 5 {
+		t.Errorf("used = %d after upload, want 5", got)
+	}
+}
+
+func TestPutQuotaReleasedOnInterrupt(t *testing.T) {
+	u := testUploaderWithQuota(t, "downloads", 1024)
+	body := io.MultiReader(
+		strings.NewReader("partial"),
+		iotest.ErrReader(errors.New("connection reset by peer")),
+	)
+	req := httptest.NewRequest(http.MethodPut, "/downloads/big.tar.gz", body)
+	req.Header.Set("If-None-Match", "*")
+	req.ContentLength = 512
+	rec := httptest.NewRecorder()
+	u.put(rec, req)
+	if rec.Code == http.StatusCreated {
+		t.Fatal("interrupted upload must not return 201")
+	}
+	if got := u.quota.Used(); got != 0 {
+		t.Errorf("used = %d after interrupted upload, want 0 (quota must be released)", got)
+	}
+}
+
+func TestPutQuotaConcurrentExclusion(t *testing.T) {
+	// Two concurrent uploads of 6 bytes each against a 10-byte quota — exactly
+	// one must succeed. The CAS loop in reserve() ensures they can't both pass.
+	const payload = "123456" // 6 bytes
+	qt := &quotaTracker{limit: 10}
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		codes   []int
+	)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Each goroutine gets its own store dir so they don't collide on
+			// the filename; the shared quota is the only contention point.
+			u, err := newBlobUploader(
+				t.TempDir(), "downloads",
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				nil, nil, qt,
+			)
+			if err != nil {
+				t.Errorf("newBlobUploader: %v", err)
+				return
+			}
+			rec := httptest.NewRecorder()
+			u.put(rec, putReq(t, "downloads", "blob.tar.gz", payload))
+			mu.Lock()
+			codes = append(codes, rec.Code)
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	created := 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusCreated:
+			created++
+		case http.StatusInsufficientStorage:
+			// expected for the loser
+		default:
+			t.Errorf("unexpected status %d (want 201 or 507)", code)
+		}
+	}
+	if created != 1 {
+		t.Errorf("exactly 1 upload should succeed, got %d; codes: %v", created, codes)
+	}
+	if got := qt.Used(); got != int64(len(payload)) {
+		t.Errorf("used = %d after concurrent uploads, want %d", got, len(payload))
 	}
 }
