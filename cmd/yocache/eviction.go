@@ -26,12 +26,15 @@ type EvictionManager struct {
 
 // TryFree attempts to free at least needed bytes. It calls each policy in
 // order, stopping as soon as the cumulative freed bytes reaches needed.
-// Returns total freed bytes; may be less than needed if the store is too empty.
-func (m *EvictionManager) TryFree(needed int64) int64 {
+// Returns total freed bytes (may be less than needed if the store is too empty)
+// and any errors collected from the policies. Policy errors are non-fatal: the
+// chain continues past a failing policy so partial eviction is still attempted.
+func (m *EvictionManager) TryFree(needed int64) (int64, error) {
 	if m == nil || len(m.policies) == 0 {
-		return 0
+		return 0, nil
 	}
 	var total int64
+	var errs []error
 	for _, p := range m.policies {
 		if total >= needed {
 			break
@@ -39,10 +42,11 @@ func (m *EvictionManager) TryFree(needed int64) int64 {
 		freed, err := p.Evict(needed - total)
 		if err != nil {
 			m.log.Warn("eviction policy error", "policy", p.Name(), "err", err)
+			errs = append(errs, err)
 		}
 		total += freed
 	}
-	return total
+	return total, errors.Join(errs...)
 }
 
 // LRUPolicy evicts the least-recently-accessed blobs first. It uses

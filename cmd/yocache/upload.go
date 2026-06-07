@@ -189,7 +189,35 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	// (net accounts for replacements: a growing VCS tarball contributes only the
 	// delta). Early exits before the defer is registered must release manually.
 	net := r.ContentLength - existingSize
-	if !u.quota.reserve(net) {
+
+	// Fast-fail before any I/O: a blob larger than the entire quota can never fit
+	// regardless of eviction — refuse without destroying cached data.
+	if u.quota.limit > 0 && net > u.quota.limit {
+		u.log.Warn("upload: blob exceeds total quota, refusing without eviction",
+			"kind", u.kind, "name", name,
+			"quota_bytes", u.quota.limit, "incoming_bytes", r.ContentLength,
+			"remote", r.RemoteAddr)
+		u.ledger.RecordQuotaExceeded(u.kind, name, u.quota.limit, u.quota.Used(), r.ContentLength)
+		http.Error(w, "storage quota exceeded", http.StatusInsufficientStorage)
+		return
+	}
+
+	reserved := u.quota.reserve(net)
+	for !reserved {
+		// Recompute deficit each iteration: a concurrent upload may steal
+		// freshly-freed space, and each eviction round should only request what
+		// is still missing rather than the original net bytes.
+		deficit := u.quota.Used() + net - u.quota.limit
+		freed, err := u.eviction.TryFree(deficit)
+		if err != nil {
+			u.log.Warn("upload: eviction error", "kind", u.kind, "name", name, "err", err)
+		}
+		if freed == 0 {
+			break // store exhausted or no eviction policy configured
+		}
+		reserved = u.quota.reserve(net)
+	}
+	if !reserved {
 		u.log.Warn("upload: quota exceeded",
 			"kind", u.kind, "name", name,
 			"quota_bytes", u.quota.limit, "used_bytes", u.quota.Used(),

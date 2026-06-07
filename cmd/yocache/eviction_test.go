@@ -23,23 +23,35 @@ func (s *stubPolicy) Evict(_ int64) (int64, error) {
 
 func TestEvictionManagerNil(t *testing.T) {
 	var m *EvictionManager
-	if got := m.TryFree(100); got != 0 {
-		t.Errorf("nil manager TryFree = %d, want 0", got)
+	freed, err := m.TryFree(100)
+	if err != nil {
+		t.Errorf("nil manager: unexpected error: %v", err)
+	}
+	if freed != 0 {
+		t.Errorf("nil manager: freed = %d, want 0", freed)
 	}
 }
 
 func TestEvictionManagerEmpty(t *testing.T) {
 	m := &EvictionManager{log: slog.Default()}
-	if got := m.TryFree(100); got != 0 {
-		t.Errorf("empty manager TryFree = %d, want 0", got)
+	freed, err := m.TryFree(100)
+	if err != nil {
+		t.Errorf("empty manager: unexpected error: %v", err)
+	}
+	if freed != 0 {
+		t.Errorf("empty manager: freed = %d, want 0", freed)
 	}
 }
 
 func TestEvictionManagerSinglePolicy(t *testing.T) {
 	p := &stubPolicy{name: "stub", toFree: 200}
 	m := &EvictionManager{policies: []EvictionPolicy{p}, log: slog.Default()}
-	if got := m.TryFree(100); got != 200 {
-		t.Errorf("TryFree = %d, want 200", got)
+	freed, err := m.TryFree(100)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if freed != 200 {
+		t.Errorf("freed = %d, want 200", freed)
 	}
 }
 
@@ -48,9 +60,12 @@ func TestEvictionManagerChained(t *testing.T) {
 	p1 := &stubPolicy{name: "first", toFree: 30}
 	p2 := &stubPolicy{name: "second", toFree: 80}
 	m := &EvictionManager{policies: []EvictionPolicy{p1, p2}, log: slog.Default()}
-	got := m.TryFree(100)
-	if got != 110 {
-		t.Errorf("TryFree = %d, want 110", got)
+	freed, err := m.TryFree(100)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if freed != 110 {
+		t.Errorf("freed = %d, want 110", freed)
 	}
 	if !p1.called || !p2.called {
 		t.Errorf("expected both policies called: p1=%v p2=%v", p1.called, p2.called)

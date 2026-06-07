@@ -71,6 +71,11 @@ func main() {
 	quotaBytes := flag.Int64("quota", 0, "total storage quota for all blob stores in bytes; 0 means unlimited")
 	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
 	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
+	var evictPolicies []string
+	flag.Func("evict", "eviction `policy` to enable (lru); repeat to chain policies in order", func(v string) error {
+		evictPolicies = append(evictPolicies, v)
+		return nil
+	})
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -134,6 +139,42 @@ func main() {
 	} else {
 		log.Info("storage quota disabled (unlimited)")
 	}
+
+	// Build the eviction manager from --evict flags.
+	stores := map[string]string{"downloads": *downloadsDir, "sstate": *sstateDir}
+	var policies []EvictionPolicy
+	for _, name := range evictPolicies {
+		switch name {
+		case "lru":
+			policies = append(policies, &LRUPolicy{
+				inventory: inv,
+				stores:    stores,
+				quota:     qt,
+				ledger:    ledger,
+				log:       log,
+			})
+		default:
+			log.Error("unknown eviction policy", "policy", name)
+			os.Exit(1)
+		}
+	}
+	var evMgr *EvictionManager
+	if len(policies) > 0 {
+		evMgr = &EvictionManager{policies: policies, log: log}
+		log.Info("eviction enabled", "policies", evictPolicies)
+
+		// Seed the inventory with blobs already on disk so the eviction order
+		// reflects reality from the first upload, not just post-restart arrivals.
+		if err := inv.Retrofit(stores); err != nil {
+			log.Error("inventory retrofit failed", "err", err)
+			os.Exit(1)
+		}
+		log.Info("inventory retrofit complete")
+	}
+
+	// Wire the eviction manager into the uploaders now that it's built.
+	downloads.eviction = evMgr
+	sstate.eviction = evMgr
 
 	ver := buildVersionInfo()
 	log.Info("yocache version", "version", ver.Version, "revision", ver.Revision, "modified", ver.Modified)
