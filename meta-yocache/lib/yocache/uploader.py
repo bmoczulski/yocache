@@ -74,6 +74,11 @@ _CHECKSUM_HEADERS = {
     "sha512": "X-Content-SHA512",
 }
 
+# Bitbake variables attached to every PUT as X-BitBake-var-<VARNAME> headers.
+# Lets the server tie each blob to the build context it arrived from — useful
+# for audit trails, cache pruning by machine/distro, and stale-blob detection.
+_BUILD_META_VARS = ("BUILDNAME", "MACHINE", "DISTRO", "DISTRO_VERSION", "TARGET_ARCH")
+
 # Cooker-side singleton + the lock guarding its lifecycle transitions.
 _uploader = None
 _lock = threading.Lock()
@@ -88,11 +93,12 @@ class Uploader:
     upload must never break a build.
     """
 
-    def __init__(self, sock_path, base_url, threads, skip):
+    def __init__(self, sock_path, base_url, threads, skip, build_meta=None):
         self.sock_path = sock_path
         self.base_url = base_url.rstrip("/")
         self.threads = max(1, int(threads))
         self.skip = skip
+        self.build_meta = build_meta or {}
         self.state = IDLE
         self._queue = queue.Queue()
         self._lsock = None
@@ -262,6 +268,9 @@ class Uploader:
                     hdr = _CHECKSUM_HEADERS.get(algo)
                     if hdr and value:
                         hdrs[hdr] = value
+                for var, value in self.build_meta.items():
+                    if value:
+                        hdrs["X-BitBake-var-" + var] = value
                 req = urllib.request.Request(
                     url, data=fh, method="PUT",
                     headers=hdrs)
@@ -302,7 +311,8 @@ def start(d):
             _warn("YOCACHE_UPLOAD_SOCK unset; uploader not started")
             return
 
-        up = Uploader(sock_path, base_url, threads, skip)
+        build_meta = {var: d.getVar(var) for var in _BUILD_META_VARS}
+        up = Uploader(sock_path, base_url, threads, skip, build_meta)
         try:
             up.start()
         except Exception as exc:
