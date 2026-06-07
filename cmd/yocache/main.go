@@ -68,6 +68,7 @@ func main() {
 	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
 	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
 	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
+	quotaBytes := flag.Int64("quota", 0, "total storage quota for all blob stores in bytes; 0 means unlimited")
 	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
 	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
 	flag.Parse()
@@ -111,15 +112,22 @@ func main() {
 	// creates its dir and sweeps staging files left by an upload an earlier run
 	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
 	// fatal — upload to that space would be permanently broken.
-	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog)
+	qt := &quotaTracker{limit: *quotaBytes}
+	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog, qt)
 	if err != nil {
 		log.Error("cannot init downloads store", "err", err)
 		os.Exit(1)
 	}
-	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog)
+	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog, qt)
 	if err != nil {
 		log.Error("cannot init sstate store", "err", err)
 		os.Exit(1)
+	}
+	qt.seed(*downloadsDir, *sstateDir)
+	if qt.limit > 0 {
+		log.Info("storage quota active", "limit_bytes", qt.limit, "used_bytes", qt.Used())
+	} else {
+		log.Info("storage quota disabled (unlimited)")
 	}
 
 	ver := buildVersionInfo()
