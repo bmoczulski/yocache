@@ -10,7 +10,69 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
+
+// quotaTracker tracks disk usage across all blob stores and enforces an
+// operator-configured storage limit. limit == 0 means unlimited.
+//
+// reserve() atomically claims space via a CAS retry loop — two concurrent
+// uploads cannot both succeed when only one fits. The counter is seeded from
+// a directory walk at startup and stays accurate thereafter.
+type quotaTracker struct {
+	limit int64
+	used  atomic.Int64
+}
+
+// Used returns the current tracked usage in bytes.
+func (q *quotaTracker) Used() int64 { return q.used.Load() }
+
+// seed walks dirs and initialises the usage counter from actual on-disk sizes.
+// Call once after all stores are created, before the server starts accepting
+// requests. Staging dotfiles are excluded.
+func (q *quotaTracker) seed(dirs ...string) {
+	var total int64
+	for _, dir := range dirs {
+		_ = filepath.WalkDir(dir, func(_ string, e os.DirEntry, err error) error {
+			if err != nil || e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				return nil
+			}
+			if fi, err := e.Info(); err == nil {
+				total += fi.Size()
+			}
+			return nil
+		})
+	}
+	q.used.Store(total)
+}
+
+// reserve atomically claims net bytes of quota space using a CAS retry loop.
+// Returns false (and leaves used unchanged) if adding net would exceed the
+// limit. Returns true immediately when quota is unlimited or net <= 0.
+// Callers must call release(net) if the upload subsequently fails.
+func (q *quotaTracker) reserve(net int64) bool {
+	if q.limit == 0 || net <= 0 {
+		return true
+	}
+	for {
+		cur := q.used.Load()
+		if cur+net > q.limit {
+			return false
+		}
+		if q.used.CompareAndSwap(cur, cur+net) {
+			return true
+		}
+		// CAS lost to a concurrent update; retry with the fresh value.
+	}
+}
+
+// release returns n bytes to the quota. Call on upload failure after a
+// successful reserve to keep the counter accurate.
+func (q *quotaTracker) release(n int64) {
+	if n > 0 {
+		q.used.Add(-n)
+	}
+}
 
 // blobUploader is the write side of the cache for one path space (the build-side
 // counterpart is meta-yocache/lib/yocache/uploader.py). A PUT /<kind>/<name>
@@ -34,8 +96,9 @@ type blobUploader struct {
 	dir       string       // blob store directory (e.g. the --downloads path)
 	kind      string       // leading path segment, e.g. "downloads"; stripped to get the name
 	log       *slog.Logger
-	ledger    *Ledger // mutation events: artifact.added, artifact.evicted
-	accessLog *Ledger // access events: artifact.fetched, artifact.missed
+	ledger    *Ledger       // mutation events: artifact.added, artifact.evicted
+	accessLog *Ledger       // access events: artifact.fetched, artifact.missed
+	quota     *quotaTracker // shared across all stores; enforces total storage limit
 }
 
 // newBlobUploader prepares the on-disk store for one path space and returns its
@@ -43,13 +106,13 @@ type blobUploader struct {
 // an earlier run didn't finish (the startup backstop to put's per-request
 // cleanup). A bad dir is returned as an error — the caller treats it as fatal,
 // since upload to that path space would otherwise be permanently broken.
-func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledger) (*blobUploader, error) {
+func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledger, quota *quotaTracker) (*blobUploader, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s store dir %q: %w", kind, dir, err)
 	}
 	sweepTempUploads(dir, log)
 	log.Info(kind+" store ready", "path", dir)
-	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger, accessLog: accessLog}, nil
+	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota}, nil
 }
 
 // put handles PUT /<kind>/<name>.
@@ -72,10 +135,19 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "If-None-Match required", http.StatusPreconditionRequired)
 		return
 	}
+	// Content-Length is mandatory: our uploader always provides it (uploader.py
+	// stats the file before sending), and without it quota accounting is impossible.
+	if r.ContentLength < 0 {
+		u.log.Warn("upload: missing Content-Length", "kind", u.kind, "name", name, "remote", r.RemoteAddr)
+		http.Error(w, "Content-Length required", http.StatusLengthRequired)
+		return
+	}
 	// If-None-Match: * means "only create if absent". Check before doing any
 	// filesystem work so we don't race to mkdir for a blob we'll reject.
+	existingSize := int64(0)
 	if stored, statErr := os.Stat(final); statErr == nil {
-		if r.ContentLength >= 0 && stored.Size() != r.ContentLength {
+		existingSize = stored.Size()
+		if stored.Size() != r.ContentLength {
 			if r.ContentLength > stored.Size() && isGrowingVCSTarball(name) {
 				// VCS mirror tarballs whose names don't encode a revision grow
 				// monotonically as the upstream repository accumulates history.
@@ -97,12 +169,26 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			// Same size (or unknown incoming length): assume identical and skip.
+			// Same size: assume identical (sstate URLs encode the unihash, DL names
+			// are stable) and skip — no need to re-transfer what we already hold.
 			u.log.Info("upload: already exists, skipping",
 				"kind", u.kind, "name", name, "remote", r.RemoteAddr)
 			w.WriteHeader(http.StatusPreconditionFailed)
 			return
 		}
+	}
+
+	// Atomically claim quota space for the net bytes this upload adds to the store
+	// (net accounts for replacements: a growing VCS tarball contributes only the
+	// delta). Early exits before the defer is registered must release manually.
+	net := r.ContentLength - existingSize
+	if !u.quota.reserve(net) {
+		u.log.Warn("upload: quota exceeded",
+			"kind", u.kind, "name", name,
+			"quota_bytes", u.quota.limit, "used_bytes", u.quota.Used(),
+			"incoming_bytes", r.ContentLength, "remote", r.RemoteAddr)
+		http.Error(w, "storage quota exceeded", http.StatusInsufficientStorage)
+		return
 	}
 
 	// A nested name (sstate's <aa>/<bb>/<file>) needs its parent created before
@@ -111,6 +197,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	// the store.
 	parent := filepath.Dir(final)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
+		u.quota.release(net)
 		u.log.Error("upload: cannot create blob dir", "dir", parent, "err", err, "remote", r.RemoteAddr)
 		http.Error(w, "cannot stage upload", http.StatusInternalServerError)
 		return
@@ -123,6 +210,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	tmp := filepath.Join(parent, "."+filepath.Base(name)+"."+randomToken())
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
+		u.quota.release(net)
 		u.log.Error("upload: cannot create staging file", "tmp", tmp, "err", err, "remote", r.RemoteAddr)
 		http.Error(w, "cannot stage upload", http.StatusInternalServerError)
 		return
@@ -130,6 +218,8 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 
 	// Until the rename commits, every exit path must take the staging file with
 	// it — a client disconnect mid-copy arrives here as an io.Copy error.
+	// release(net) undoes the quota reservation on any failure; on success
+	// reserve() already credited the bytes so no further adjustment is needed.
 	committed := false
 	defer func() {
 		f.Close()
@@ -137,6 +227,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 			if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
 				u.log.Warn("upload: leftover staging file not removed", "tmp", tmp, "err", err)
 			}
+			u.quota.release(net)
 		}
 	}()
 
@@ -149,7 +240,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 	// A short-but-clean stream (the client promised more via Content-Length than
 	// it sent) must not be published as a complete blob.
-	if r.ContentLength >= 0 && n != r.ContentLength {
+	if n != r.ContentLength {
 		u.log.Warn("upload: short body",
 			"kind", u.kind, "name", name, "got", n, "want", r.ContentLength, "remote", r.RemoteAddr)
 		http.Error(w, "incomplete upload", http.StatusBadRequest)
