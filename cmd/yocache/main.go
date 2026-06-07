@@ -65,7 +65,7 @@ type sstateMeta struct {
 
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
-	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
+	dbPath := flag.String("db", "var/yocache.db", "path to the SQLite operational database")
 	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
 	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
 	quotaBytes := flag.Int64("quota", 0, "total storage quota for all blob stores in bytes; 0 means unlimited")
@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	log.Info("hashequiv store ready", "path", *dbPath)
+	log.Info("operational db ready", "path", *dbPath)
 
 	ledger, err := openLedger(*ledgerPath, log)
 	if err != nil {
