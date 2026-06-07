@@ -141,6 +141,23 @@ func (l *Ledger) RecordArtifactFetched(kind, path, buildID string) {
 	})
 }
 
+// artifactMissedDetails is the details payload for artifact.missed.
+type artifactMissedDetails struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
+
+// RecordArtifactMissed records that a lookup found no stored blob (a cache
+// miss on GET/HEAD — bitbake will fall back to the upstream mirror).
+func (l *Ledger) RecordArtifactMissed(kind, path, buildID string) {
+	l.write(ledgerEntry{
+		Ts:      time.Now().UTC(),
+		Type:    "artifact.missed",
+		BuildID: buildID,
+		Details: l.marshalDetails(artifactMissedDetails{Kind: kind, Path: path}),
+	})
+}
+
 // artifactEvictedDetails is the details payload for artifact.evicted.
 // Not yet called — defined here as the extension point for eviction policy.
 type artifactEvictedDetails struct {
