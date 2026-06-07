@@ -58,12 +58,13 @@ type outhashRecord struct {
 // hashEquiv is the WebSocket handler that serves the OEHASHEQUIV protocol over
 // the SQLite-backed store (hashequiv_store.go).
 type hashEquiv struct {
-	store *hashEquivStore
-	log   *slog.Logger
+	store  *hashEquivStore
+	log    *slog.Logger
+	ledger *Ledger
 }
 
-func newHashEquiv(store *hashEquivStore, log *slog.Logger) *hashEquiv {
-	return &hashEquiv{store: store, log: log}
+func newHashEquiv(store *hashEquivStore, log *slog.Logger, ledger *Ledger) *hashEquiv {
+	return &hashEquiv{store: store, log: log, ledger: ledger}
 }
 
 // heConn wraps a WebSocket with the send/recv helpers that mirror bb.asyncrpc's
@@ -357,6 +358,7 @@ func (h *hashEquiv) handleReport(c *heConn, raw json.RawMessage) error {
 		"method", req.Method,
 		"taskhash", short(req.Taskhash),
 		"unihash", short(unihash))
+	h.ledger.RecordHashEquivSet(req.Method, req.Taskhash, unihash, "")
 	return c.sendMessage(map[string]any{
 		"taskhash": req.Taskhash,
 		"method":   req.Method,
@@ -378,6 +380,7 @@ func (h *hashEquiv) handleReportEquiv(c *heConn, raw json.RawMessage) error {
 		h.log.Warn("hashequiv: unihash persist failed", "err", err, "method", req.Method)
 		unihash = req.Unihash
 	}
+	h.ledger.RecordHashEquivSet(req.Method, req.Taskhash, unihash, "")
 	return c.sendMessage(map[string]any{
 		"taskhash": req.Taskhash,
 		"method":   req.Method,

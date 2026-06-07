@@ -68,6 +68,7 @@ func main() {
 	dbPath := flag.String("db", "var/hashequiv/hashequiv.db", "path to the SQLite operational database")
 	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
 	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
+	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the append-only audit ledger (created if absent)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -89,16 +90,24 @@ func main() {
 	defer store.Close()
 	log.Info("hashequiv store ready", "path", *dbPath)
 
+	ledger, err := openLedger(*ledgerPath, log)
+	if err != nil {
+		log.Error("cannot open ledger", "path", *ledgerPath, "err", err)
+		os.Exit(1)
+	}
+	defer ledger.Close()
+	log.Info("ledger ready", "path", *ledgerPath)
+
 	// Blob stores for the two writable path spaces (DL mirror + sstate). Each
 	// creates its dir and sweeps staging files left by an upload an earlier run
 	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
 	// fatal — upload to that space would be permanently broken.
-	downloads, err := newBlobUploader(*downloadsDir, "downloads", log)
+	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger)
 	if err != nil {
 		log.Error("cannot init downloads store", "err", err)
 		os.Exit(1)
 	}
-	sstate, err := newBlobUploader(*sstateDir, "sstate", log)
+	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger)
 	if err != nil {
 		log.Error("cannot init sstate store", "err", err)
 		os.Exit(1)
@@ -113,7 +122,7 @@ func main() {
 	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
 	// hashequiv.go for the protocol and the (thin, in-memory) store.
-	mux.HandleFunc("/hashequiv", newHashEquiv(store, log).handle)
+	mux.HandleFunc("/hashequiv", newHashEquiv(store, log, ledger).handle)
 
 	// Build telemetry sink. yocache.bbclass POSTs one JSON report per
 	// bitbake event. We just decode and log it for now — no persistence

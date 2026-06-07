@@ -31,9 +31,10 @@ import (
 //     random-suffixed staging file, so they can't trample each other; whichever
 //     renames last wins, and either way the published file is whole.
 type blobUploader struct {
-	dir  string       // blob store directory (e.g. the --downloads path)
-	kind string       // leading path segment, e.g. "downloads"; stripped to get the name
-	log  *slog.Logger
+	dir    string       // blob store directory (e.g. the --downloads path)
+	kind   string       // leading path segment, e.g. "downloads"; stripped to get the name
+	log    *slog.Logger
+	ledger *Ledger
 }
 
 // newBlobUploader prepares the on-disk store for one path space and returns its
@@ -41,13 +42,13 @@ type blobUploader struct {
 // an earlier run didn't finish (the startup backstop to put's per-request
 // cleanup). A bad dir is returned as an error — the caller treats it as fatal,
 // since upload to that path space would otherwise be permanently broken.
-func newBlobUploader(dir, kind string, log *slog.Logger) (*blobUploader, error) {
+func newBlobUploader(dir, kind string, log *slog.Logger, ledger *Ledger) (*blobUploader, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s store dir %q: %w", kind, dir, err)
 	}
 	sweepTempUploads(dir, log)
 	log.Info(kind+" store ready", "path", dir)
-	return &blobUploader{dir: dir, kind: kind, log: log}, nil
+	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger}, nil
 }
 
 // put handles PUT /<kind>/<name>.
@@ -172,6 +173,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	committed = true
 
 	u.log.Info("cache upload stored", "kind", u.kind, "name", name, "bytes", n, "remote", r.RemoteAddr)
+	u.ledger.RecordArtifactAdded(u.kind, name, n, "")
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -207,6 +209,7 @@ func (u *blobUploader) get(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	u.log.Info("cache hit", "kind", u.kind, "name", name, "bytes", fi.Size(),
 		"method", r.Method, "remote", r.RemoteAddr)
+	u.ledger.RecordArtifactFetched(u.kind, name, "")
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
