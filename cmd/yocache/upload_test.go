@@ -24,7 +24,7 @@ func testUploader(t *testing.T, kind string) *blobUploader {
 func testUploaderWithQuota(t *testing.T, kind string, limit int64) *blobUploader {
 	t.Helper()
 	qt := &quotaTracker{limit: limit}
-	u, err := newBlobUploader(t.TempDir(), kind, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, qt)
+	u, err := newBlobUploader(t.TempDir(), kind, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, qt, nil, nil)
 	if err != nil {
 		t.Fatalf("newBlobUploader: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestPutQuotaExceededLedgerEntry(t *testing.T) {
 
 	qt := &quotaTracker{limit: 4}
 	u, err := newBlobUploader(t.TempDir(), "downloads",
-		slog.New(slog.NewTextHandler(io.Discard, nil)), ledger, nil, qt)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), ledger, nil, qt, nil, nil)
 	if err != nil {
 		t.Fatalf("newBlobUploader: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestPutQuotaConcurrentExclusion(t *testing.T) {
 			u, err := newBlobUploader(
 				t.TempDir(), "downloads",
 				slog.New(slog.NewTextHandler(io.Discard, nil)),
-				nil, nil, qt,
+				nil, nil, qt, nil, nil,
 			)
 			if err != nil {
 				t.Errorf("newBlobUploader: %v", err)

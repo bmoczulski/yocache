@@ -95,6 +95,7 @@ func main() {
 	}
 	log.Info("operational db ready", "path", *dbPath)
 	store := &hashEquivStore{db: db}
+	inv := openBlobInventory(db)
 
 	ledger, err := openLedger(*ledgerPath, log)
 	if err != nil {
@@ -117,12 +118,12 @@ func main() {
 	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
 	// fatal — upload to that space would be permanently broken.
 	qt := &quotaTracker{limit: *quotaBytes}
-	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog, qt)
+	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog, qt, inv, nil)
 	if err != nil {
 		log.Error("cannot init downloads store", "err", err)
 		os.Exit(1)
 	}
-	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog, qt)
+	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog, qt, inv, nil)
 	if err != nil {
 		log.Error("cannot init sstate store", "err", err)
 		os.Exit(1)

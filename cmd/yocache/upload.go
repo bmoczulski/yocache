@@ -101,9 +101,11 @@ type blobUploader struct {
 	dir       string       // blob store directory (e.g. the --downloads path)
 	kind      string       // leading path segment, e.g. "downloads"; stripped to get the name
 	log       *slog.Logger
-	ledger    *Ledger       // mutation events: artifact.added, artifact.evicted
-	accessLog *Ledger       // access events: artifact.fetched, artifact.missed
-	quota     *quotaTracker // shared across all stores; enforces total storage limit
+	ledger    *Ledger          // mutation events: artifact.added, artifact.evicted
+	accessLog *Ledger          // access events: artifact.fetched, artifact.missed
+	quota     *quotaTracker    // shared across all stores; enforces total storage limit
+	inventory *blobInventory   // per-blob metadata for eviction ordering; nil disables tracking
+	eviction  *EvictionManager // policy chain consulted when quota is full; nil disables eviction
 }
 
 // newBlobUploader prepares the on-disk store for one path space and returns its
@@ -111,13 +113,13 @@ type blobUploader struct {
 // an earlier run didn't finish (the startup backstop to put's per-request
 // cleanup). A bad dir is returned as an error — the caller treats it as fatal,
 // since upload to that path space would otherwise be permanently broken.
-func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledger, quota *quotaTracker) (*blobUploader, error) {
+func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledger, quota *quotaTracker, inv *blobInventory, eviction *EvictionManager) (*blobUploader, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s store dir %q: %w", kind, dir, err)
 	}
 	sweepTempUploads(dir, log)
 	log.Info(kind+" store ready", "path", dir)
-	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota}, nil
+	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota, inventory: inv, eviction: eviction}, nil
 }
 
 // put handles PUT /<kind>/<name>.
@@ -272,6 +274,11 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 
 	u.log.Info("cache upload stored", "kind", u.kind, "name", name, "bytes", n, "remote", r.RemoteAddr)
 	u.ledger.RecordArtifactAdded(u.kind, name, n, "")
+	if u.inventory != nil {
+		if err := u.inventory.Upsert(u.kind, name, n); err != nil {
+			u.log.Warn("upload: inventory upsert failed", "kind", u.kind, "name", name, "err", err)
+		}
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -308,6 +315,11 @@ func (u *blobUploader) get(w http.ResponseWriter, r *http.Request) {
 	u.log.Info("cache hit", "kind", u.kind, "name", name, "bytes", fi.Size(),
 		"method", r.Method, "remote", r.RemoteAddr)
 	u.accessLog.RecordArtifactFetched(u.kind, name, "")
+	if u.inventory != nil {
+		if err := u.inventory.Touch(u.kind, name); err != nil {
+			u.log.Warn("cache hit: inventory touch failed", "kind", u.kind, "name", name, "err", err)
+		}
+	}
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
