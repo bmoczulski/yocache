@@ -19,6 +19,9 @@
 # Local config overrides
 yocache.local.toml
 
+# Local working notes
+TODO.md
+
 # Editor / OS
 .idea/
 .vscode/*

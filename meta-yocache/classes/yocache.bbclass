@@ -545,6 +545,8 @@ python yocache_notify_dl () {
         _CHECKSUM_ATTRS = ("sha256", "sha1", "md5", "sha384", "sha512")
         for u in fetcher.urls:
             ud = fetcher.ud[u]
+            if ud.type == "file":
+                continue
             localpath_checksums = {
                 algo: getattr(ud, algo + "_expected", None) or ""
                 for algo in _CHECKSUM_ATTRS
