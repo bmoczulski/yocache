@@ -129,9 +129,9 @@ func main() {
 	log.Info("access log ready", "path", *accessLogPath)
 
 	// Blob stores for the two writable path spaces (DL mirror + sstate). Each
-	// creates its dir and sweeps staging files left by an upload an earlier run
-	// didn't finish; see upload.go for the dot-staging scheme. A bad path is
-	// fatal — upload to that space would be permanently broken.
+	// creates its dir and wipes the .uploads staging subtree left by an earlier
+	// run; see upload.go for the staging scheme. A bad path is fatal — upload to
+	// that space would be permanently broken.
 	qt := &quotaTracker{limit: quotaBytes}
 	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog, qt, inv, nil)
 	if err != nil {

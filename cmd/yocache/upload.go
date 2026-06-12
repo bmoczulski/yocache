@@ -83,23 +83,27 @@ func (q *quotaTracker) release(n int64) {
 // counterpart is meta-yocache/lib/yocache/uploader.py). A PUT /<kind>/<name>
 // streams the request body to <dir>/<name>.
 //
-// It is crash- and reader-safe by construction. The body is written to a hidden
-// staging file — a leading "." plus a random suffix — and only atomically
+// It is crash- and reader-safe by construction. The body is written to a private
+// staging directory (<dir>/.uploads/<randomToken>/<basename>) and only atomically
 // rename(2)d onto the final name once the whole payload has landed and been
 // fsync'd. Consequences:
 //
-//   - A reader (the future GET side, today still the void handler) never observes
-//     a partial blob: it sees either no file or the complete one. The leading dot
-//     also keeps staging files out of any directory listing a reader walks.
-//   - A client that disconnects mid-upload leaves only a dotfile, removed
-//     immediately on the failure path here and, as a backstop for a hard kill,
-//     swept at startup by sweepTempUploads.
+//   - A reader never observes a partial blob: it sees either no file or the
+//     complete one.  The .uploads subtree is unreachable via the HTTP API
+//     (safeBlobName rejects names with a leading dot).
+//   - A client that disconnects mid-upload leaves only a subdirectory under
+//     .uploads, removed immediately on the failure path here and, as a backstop
+//     for a hard kill, wiped entirely at startup by wipeUploadStaging.
 //   - Two builds uploading the same artifact concurrently each get their own
-//     random-suffixed staging file, so they can't trample each other; whichever
+//     randomToken subdirectory, so they can't trample each other; whichever
 //     renames last wins, and either way the published file is whole.
+//   - Staging in a subdirectory of dir (same filesystem as the final path) keeps
+//     the rename atomic and avoids appending a suffix to a name that may already
+//     be near the filesystem's 255-byte limit.
 type blobUploader struct {
-	dir       string       // blob store directory (e.g. the --downloads path)
-	kind      string       // leading path segment, e.g. "downloads"; stripped to get the name
+	dir       string           // blob store directory (e.g. the --downloads path)
+	uploadDir string           // staging area: dir/.uploads; per-request tmpDirs live here
+	kind      string           // leading path segment, e.g. "downloads"; stripped to get the name
 	log       *slog.Logger
 	ledger    *Ledger          // mutation events: artifact.added, artifact.evicted
 	accessLog *Ledger          // access events: artifact.fetched, artifact.missed
@@ -109,17 +113,20 @@ type blobUploader struct {
 }
 
 // newBlobUploader prepares the on-disk store for one path space and returns its
-// handler: it creates dir and sweeps any staging files left behind by an upload
-// an earlier run didn't finish (the startup backstop to put's per-request
+// handler: it creates dir and wipes the staging area left behind by any uploads
+// a previous run didn't finish (the startup backstop to put's per-request
 // cleanup). A bad dir is returned as an error — the caller treats it as fatal,
 // since upload to that path space would otherwise be permanently broken.
 func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledger, quota *quotaTracker, inv *blobInventory, eviction *EvictionManager) (*blobUploader, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s store dir %q: %w", kind, dir, err)
 	}
-	sweepTempUploads(dir, log)
+	uploadDir := filepath.Join(dir, ".uploads")
+	if err := wipeUploadStaging(uploadDir, log); err != nil {
+		return nil, fmt.Errorf("wipe %s staging dir %q: %w", kind, uploadDir, err)
+	}
 	log.Info(kind+" store ready", "path", dir)
-	return &blobUploader{dir: dir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota, inventory: inv, eviction: eviction}, nil
+	return &blobUploader{dir: dir, uploadDir: uploadDir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota, inventory: inv, eviction: eviction}, nil
 }
 
 // put handles PUT /<kind>/<name>.
@@ -228,7 +235,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A nested name (sstate's <aa>/<bb>/<file>) needs its parent created before
-	// we can stage there. filepath.Join cleaned the name, and safeBlobName
+	// we can rename into it. filepath.Join cleaned the name, and safeBlobName
 	// guaranteed it can't climb out of u.dir, so this only ever makes dirs under
 	// the store.
 	parent := filepath.Dir(final)
@@ -239,31 +246,44 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stage in the SAME directory as the final file so the rename is
-	// same-filesystem (hence atomic). The leading dot goes on the basename (not
-	// some ancestor segment) so the staging file sits beside its target and the
-	// dotfile invariant/sweep still apply.
-	tmp := filepath.Join(parent, "."+filepath.Base(name)+"."+randomToken())
+	// Stage in a private subdirectory of u.uploadDir (which lives inside u.dir,
+	// same filesystem as final) so the rename is atomic. Each upload gets its own
+	// random subdirectory; the file inside carries the plain basename with no
+	// extra suffix, avoiding any 255-byte filename limit overflow for long sstate
+	// names.
+	tmpDir := filepath.Join(u.uploadDir, randomToken())
+	if err := os.Mkdir(tmpDir, 0o755); err != nil {
+		u.quota.release(net)
+		u.log.Error("upload: cannot create staging dir", "dir", tmpDir, "err", err, "remote", r.RemoteAddr)
+		http.Error(w, "cannot stage upload", http.StatusInternalServerError)
+		return
+	}
+	tmp := filepath.Join(tmpDir, filepath.Base(name))
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
+		_ = os.Remove(tmpDir)
 		u.quota.release(net)
 		u.log.Error("upload: cannot create staging file", "tmp", tmp, "err", err, "remote", r.RemoteAddr)
 		http.Error(w, "cannot stage upload", http.StatusInternalServerError)
 		return
 	}
 
-	// Until the rename commits, every exit path must take the staging file with
-	// it — a client disconnect mid-copy arrives here as an io.Copy error.
+	// Until the rename commits, every exit path must clean up the staging dir —
+	// a client disconnect mid-copy arrives here as an io.Copy error.
 	// release(net) undoes the quota reservation on any failure; on success
 	// reserve() already credited the bytes so no further adjustment is needed.
 	committed := false
 	defer func() {
 		f.Close()
 		if !committed {
-			if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-				u.log.Warn("upload: leftover staging file not removed", "tmp", tmp, "err", err)
+			if err := os.RemoveAll(tmpDir); err != nil {
+				u.log.Warn("upload: staging dir not cleaned up", "dir", tmpDir, "err", err)
 			}
 			u.quota.release(net)
+		} else {
+			// tmpDir is empty after the rename; remove it.  Failure is cosmetic —
+			// startup wipe clears any leftovers next time.
+			_ = os.Remove(tmpDir)
 		}
 	}()
 
@@ -397,8 +417,8 @@ func isGrowingVCSTarball(name string) bool {
 //
 // Every segment must be a plain name: no "" (empty — leading/trailing/double
 // slash), and no leading dot, which also rules out "." and ".." (traversal).
-// The leading-dot rule keeps the invariant that *every* dotfile under a blob dir
-// is dead staging state, which is what lets sweepTempUploads remove them blindly.
+// The leading-dot rule keeps .uploads/ (the staging subtree) unreachable via
+// the HTTP API, so GET can never serve a partial blob.
 func safeBlobName(name string) bool {
 	if name == "" {
 		return false
@@ -421,33 +441,21 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// sweepTempUploads removes leftover staging files (leading-dot blobs from an
-// interrupted upload) anywhere under dir. The per-request defer in put handles
-// the normal disconnect case; this is the startup backstop for a hard kill or
-// crash that skipped it, keeping the "every dotfile is dead staging state"
-// invariant true. It walks recursively because sstate stages into nested
-// <aa>/<bb>/ subdirs, not just the top level.
-func sweepTempUploads(dir string, log *slog.Logger) {
-	removed := 0
-	err := filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
-		if err != nil {
-			log.Warn("upload sweep: cannot walk", "path", p, "err", err)
-			return nil // skip this entry, keep sweeping the rest
-		}
-		if e.IsDir() || !strings.HasPrefix(e.Name(), ".") {
-			return nil
-		}
-		if err := os.Remove(p); err != nil {
-			log.Warn("upload sweep: cannot remove", "path", p, "err", err)
-			return nil
-		}
-		removed++
-		return nil
-	})
-	if err != nil {
-		log.Warn("upload sweep: walk failed", "dir", dir, "err", err)
+// wipeUploadStaging removes dir wholesale and recreates it empty — the startup
+// backstop for staging subdirs left behind by a hard kill or crash that skipped
+// the per-request defer in put. Wiping the whole tree is safe because every
+// entry under dir is a randomToken subdirectory owned by exactly one in-flight
+// upload; nothing under here is meant to survive a restart.
+func wipeUploadStaging(dir string, log *slog.Logger) error {
+	entries, _ := os.ReadDir(dir) // ignore error — dir may not exist yet
+	if err := os.RemoveAll(dir); err != nil {
+		return err
 	}
-	if removed > 0 {
-		log.Info("upload sweep: removed stale staging files", "dir", dir, "count", removed)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
+	if len(entries) > 0 {
+		log.Info("upload staging: wiped stale staging dirs", "dir", dir, "count", len(entries))
+	}
+	return nil
 }
