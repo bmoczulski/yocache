@@ -7,7 +7,7 @@
 /.cache/
 
 # Local data the daemon may write (blob store, sqlite/duckdb files)
-/var/
+/var*
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
