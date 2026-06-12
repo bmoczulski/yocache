@@ -5,10 +5,10 @@
 #     YOCACHE_URL = "http://yocache.local:6768"
 #
 # Inheriting this class also wires bitbake's mirrors at the yocache server: it
-# inherits own-mirrors and derives both SOURCE_MIRROR_URL (source downloads) and
-# SSTATE_MIRRORS (sstate) from YOCACHE_URL (see the mirror wiring below), so no
-# separate mirror lines are needed in local.conf. The one thing that can't be
-# folded in is `INHERIT += "toaster"` (needed for the MissedSstate event): it
+# prepends PREMIRRORS (source downloads) and prepends SSTATE_MIRRORS (sstate) from
+# YOCACHE_URL (see the mirror wiring below), so no separate mirror lines are
+# needed in local.conf. The one thing that can't be folded in is
+# `INHERIT += "toaster"` (needed for the MissedSstate event): it
 # must stay in local.conf, because sstate.bbclass gates MissedSstate on the
 # global INHERIT variable, which a per-recipe class can't set.
 #
@@ -107,15 +107,51 @@ YOCACHE_LOG_LIMIT ??= "10"
 # YOCACHE_URL_REPLACEMENTS = "type=TYPE/host=HOST/mirrorname=MIRRORNAME/basename=BASENAME/path=PATH/"
 YOCACHE_URL_REPLACEMENTS = "PATH"
 
-# --- DL (downloads) mirror wiring ----------------------------------------
-# bitbake has no notion of "the yocache server" for source fetches, so route
-# its PREMIRRORS at one via own-mirrors, which prepends every fetch scheme
-# (git/https/npm/crate/...) to SOURCE_MIRROR_URL. Inheriting it here means a
-# plain `INHERIT += "yocache"` is enough to send downloads through yocache, with
-# no separate own-mirrors line in local.conf.
-inherit own-mirrors
-SOURCE_MIRROR_URL += "${YOCACHE_URL}/downloads/${YOCACHE_URL_REPLACEMENTS}"
-SSTATE_MIRRORS = "file://.* ${YOCACHE_URL}/sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
+# --- DL (downloads) + sstate mirror wiring --------------------------------
+# Prepend yocache directly to PREMIRRORS/SSTATE_MIRRORS using the bitbake
+# DataSmart Python API (d.prependVar / d.appendVar) rather than any text
+# operator syntax.  _prepend/_append is native to Dunfell but was removed
+# in Scarthgap; :prepend/:append was introduced in Kirkstone and is unknown
+# to Dunfell.  The Python API is version-agnostic: it manipulates the
+# internal flag mechanism directly, bypassing the text-syntax split.
+#
+# For PREMIRRORS specifically: own-mirrors + SOURCE_MIRROR_URL += would
+# collapse multiple mirror URLs into one string and emit 3-token PREMIRRORS
+# lines ("pattern url1 url2") that bitbake rejects with "should have paired
+# members".  Direct PREMIRRORS manipulation avoids touching SOURCE_MIRROR_URL.
+#
+# The anonymous Python function also handles SSTATEPOSTCREATEFUNCS (see the
+# "Artifact upload" section below for the rationale — same as before, just
+# expressed via d.appendVar instead of a text operator).
+python () {
+    yocache_url = d.getVar("YOCACHE_URL") or ""
+    repl        = d.getVar("YOCACHE_URL_REPLACEMENTS") or ""
+
+    dl_url = "{}/downloads/{}".format(yocache_url, repl)
+    d.prependVar("PREMIRRORS",
+        "cvs://.*/.*     {0} \n "
+        "svn://.*/.*     {0} \n "
+        "git://.*/.*     {0} \n "
+        "gitsm://.*/.*   {0} \n "
+        "hg://.*/.*      {0} \n "
+        "bzr://.*/.*     {0} \n "
+        "p4://.*/.*      {0} \n "
+        "osc://.*/.*     {0} \n "
+        "https?://.*/.*  {0} \n "
+        "ftp://.*/.*     {0} \n "
+        "npm://.*/?.*    {0} \n ".format(dl_url)
+    )
+
+    ss_url = "{}/sstate/{};downloadfilename=PATH".format(yocache_url, repl)
+    d.prependVar("SSTATE_MIRRORS", "file://.* {} \n ".format(ss_url))
+
+    # SSTATEPOSTCREATEFUNCS: append the sstate upload notify hook.
+    # sstate.bbclass hard-assigns SSTATEPOSTCREATEFUNCS = "" at parse time;
+    # this anonymous function runs after all static class assignments, so
+    # d.appendVar() records the flag after that hard assignment and it
+    # survives to expansion time when sstate_package() reads the variable.
+    d.appendVar("SSTATEPOSTCREATEFUNCS", " yocache_notify_sstate")
+}
 
 # --- Artifact upload (sstate + DL) ---------------------------------------
 # The read side above pulls from yocache; this is the write side. bitbake has no
@@ -506,18 +542,11 @@ python yocache_notify_sstate () {
     except Exception as exc:
         bb.warn("yocache: sstate upload notify failed: %s" % exc)
 }
-# Register with ':append', NOT '+='. sstate.bbclass hard-assigns
-# `SSTATEPOSTCREATEFUNCS = ""` (sstate.bbclass:99) and is inherited via
-# INHERIT_DISTRO *after* this class (which arrives through local.conf's INHERIT),
-# so a parse-time '+=' here is silently wiped before the create loop in
-# sstate_package() ever reads it — the hook would never fire. A ':append' is
-# applied at expansion time, after that hard assignment, so it survives.
-# Then keep the func out of the task signature (vardep*exclude): a cache layer
-# must be transparent, so enabling yocache must not perturb taskhashes/unihashes
-# — otherwise yocache builders can't share sstate with non-yocache ones, and
-# toggling it forces a full rebuild. Same idiom buildhistory/uninative use for
-# the sibling SSTATEPOSTUNPACKFUNCS.
-SSTATEPOSTCREATEFUNCS:append = " yocache_notify_sstate"
+# The hook registration (d.appendVar in the anonymous python () above) must
+# not perturb taskhashes/unihashes — a cache layer must be transparent, so
+# enabling yocache must not force a full rebuild or prevent sstate sharing
+# with non-yocache builds.  The vardep*exclude flags below achieve that; they
+# use [flag] syntax which is stable across all bitbake versions.
 SSTATEPOSTCREATEFUNCS[vardepvalueexclude] .= "| yocache_notify_sstate"
 sstate_package[vardepsexclude] += "yocache_notify_sstate"
 
