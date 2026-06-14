@@ -79,6 +79,11 @@ func main() {
 		evictPolicies = append(evictPolicies, v)
 		return nil
 	})
+	var blockListRecipes []string
+	flag.Func("block-recipe", "recipe `name` to block from all cache operations (GET/PUT/HEAD); repeat to add more", func(v string) error {
+		blockListRecipes = append(blockListRecipes, v)
+		return nil
+	})
 	flag.Parse()
 
 	quotaUint, err := humanize.ParseBytes(*quotaStr)
@@ -88,7 +93,12 @@ func main() {
 	}
 	quotaBytes := int64(quotaUint)
 
+	blockList := newRecipeBlockList(blockListRecipes)
+
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if len(blockList) > 0 {
+		log.Info("recipe block list active", "recipes", blockListRecipes)
+	}
 
 	// Operational state lives in a single SQLite file shared by all stores.
 	// Make the parent dir so the default "var/" path works out of the box.
@@ -275,6 +285,12 @@ func main() {
 	blobStores := map[string]*blobUploader{"sstate": sstate, "downloads": downloads}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		identity, kind, blobName, ok := parseIdentityPath(r.URL.Path)
+		if ok && blockList.blocked(kind, blobName) {
+			log.Warn("blocked recipe",
+				"kind", kind, "name", blobName, "method", r.Method, "remote", r.RemoteAddr)
+			http.Error(w, "recipe blocked", http.StatusForbidden)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
 			if !ok {
