@@ -196,10 +196,10 @@ YOCACHE_UPLOAD_SOCK ??= "${TMPDIR}/yocache-upload.sock"
 YOCACHE_SKIP_UPLOAD ??= "0"
 
 # Per-type upload opt-out: space-separated list of artifact types to skip.
-# Valid values: "sstate" (or "sstate-cache"), "downloads". Example:
+# Valid values: "sstate" (or "sstate-cache"), "downloads", "all". Example:
 #   YOCACHE_SKIP_UPLOAD_TYPES = "downloads"   # fetch from cache but don't push DL artifacts
 #   YOCACHE_SKIP_UPLOAD_TYPES = "sstate"      # only suppress sstate uploads
-#   YOCACHE_SKIP_UPLOAD_TYPES = "sstate downloads"  # upload nothing (same effect as YOCACHE_SKIP_UPLOAD = "1")
+#   YOCACHE_SKIP_UPLOAD_TYPES = "all"         # upload nothing (shortcut for "sstate downloads")
 YOCACHE_SKIP_UPLOAD_TYPES ??= ""
 
 # Space-separated list of recipe names (PN) to exclude from all cache uploads.

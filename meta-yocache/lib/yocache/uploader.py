@@ -251,7 +251,7 @@ class Uploader:
         if self.skip:
             _note("dry-run, would PUT %s (%s)" % (url, path))
             return
-        if kind in self.skip_types:
+        if "all" in self.skip_types or kind in self.skip_types:
             _note("skip-type %s, would PUT %s (%s)" % (kind, url, path))
             return
         try:
