@@ -341,16 +341,11 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// get handles GET (and HEAD — Go's ServeMux routes HEAD to a GET handler)
-// /<kind>/<name>: serve the stored blob, or 404 on a miss so bitbake's mirror
-// fetch falls back to upstream and the build still completes. http.ServeContent
-// does the rest from the open file — HEAD (headers, no body), Range, the
-// Content-Length/Last-Modified headers, and conditional requests — which matters
-// because bitbake HEADs an sstate object before it GETs it.
-func (u *blobUploader) get(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/"+u.kind+"/")
+// serveBlob serves a single blob by pre-parsed name. machine and buildName come
+// from the identity path prefix (empty for direct /sstate/ or /downloads/ requests).
+func (u *blobUploader) serveBlob(w http.ResponseWriter, r *http.Request, name, machine, buildName string) {
 	if !safeBlobName(name) {
-		u.miss(w, r, name)
+		u.miss(w, r, name, machine, buildName)
 		return
 	}
 	// safeBlobName guaranteed name can't climb out of u.dir, so this stays inside
@@ -358,22 +353,25 @@ func (u *blobUploader) get(w http.ResponseWriter, r *http.Request) {
 	// which safeBlobName already rejected.
 	f, err := os.Open(filepath.Join(u.dir, name))
 	if err != nil {
-		u.miss(w, r, name) // absent or unreadable — both are cache misses
+		u.miss(w, r, name, machine, buildName) // absent or unreadable — both are cache misses
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil || fi.IsDir() {
-		u.miss(w, r, name)
+		u.miss(w, r, name, machine, buildName)
 		return
 	}
 
 	// It's a blob, not text/HTML to sniff; say so up front so ServeContent skips
 	// content sniffing. bitbake ignores the type, but octet-stream is correct.
 	w.Header().Set("Content-Type", "application/octet-stream")
-	u.log.Info("cache hit", "kind", u.kind, "name", name, "bytes", fi.Size(),
-		"method", r.Method, "remote", r.RemoteAddr)
-	u.accessLog.RecordArtifactFetched(u.kind, name, "")
+	logAttrs := []any{"kind", u.kind, "name", name, "bytes", fi.Size(), "method", r.Method, "remote", r.RemoteAddr}
+	if machine != "" {
+		logAttrs = append(logAttrs, "machine", machine)
+	}
+	u.log.Info("cache hit", logAttrs...)
+	u.accessLog.RecordArtifactFetched(u.kind, name, "", machine, buildName)
 	if u.inventory != nil {
 		if err := u.inventory.Touch(u.kind, name); err != nil {
 			u.log.Warn("cache hit: inventory touch failed", "kind", u.kind, "name", name, "err", err)
@@ -385,10 +383,13 @@ func (u *blobUploader) get(w http.ResponseWriter, r *http.Request) {
 // miss logs a lookup that found nothing and returns 404 — the "void" outcome
 // that lets bitbake fall back to upstream. Mirrors the catch-all's log shape so
 // hits and misses read alike.
-func (u *blobUploader) miss(w http.ResponseWriter, r *http.Request, name string) {
-	u.log.Info("cache miss", "kind", u.kind, "name", name,
-		"method", r.Method, "ua", r.UserAgent(), "remote", r.RemoteAddr)
-	u.accessLog.RecordArtifactMissed(u.kind, name, "")
+func (u *blobUploader) miss(w http.ResponseWriter, r *http.Request, name, machine, buildName string) {
+	logAttrs := []any{"kind", u.kind, "name", name, "method", r.Method, "ua", r.UserAgent(), "remote", r.RemoteAddr}
+	if machine != "" {
+		logAttrs = append(logAttrs, "machine", machine)
+	}
+	u.log.Info("cache miss", logAttrs...)
+	u.accessLog.RecordArtifactMissed(u.kind, name, "", machine, buildName)
 	http.NotFound(w, r)
 }
 
@@ -418,6 +419,51 @@ func isGrowingVCSTarball(name string) bool {
 		}
 	}
 	return false
+}
+
+// parseIdentityPath parses a request URL path that may carry an optional
+// key/value identity prefix before the kind segment. Two URL forms are accepted:
+//
+//	/<kind>/<blob-path>                              (no identity)
+//	/key1/val1/key2/val2/.../<kind>/<blob-path>      (identity prefix)
+//
+// The kind sentinel is the first path segment that equals "sstate" or
+// "downloads". Everything before it is the identity k/v list (must be an even
+// number of segments); everything after is the blob name. ok is false for
+// malformed inputs (odd-length identity list, missing kind, empty blob name).
+func parseIdentityPath(path string) (identity map[string]string, kind, blobName string, ok bool) {
+	// Strip leading slash and split into segments.
+	path = strings.TrimPrefix(path, "/")
+	segs := strings.SplitN(path, "/", -1)
+
+	// Find the kind sentinel.
+	kindIdx := -1
+	for i, s := range segs {
+		if s == "sstate" || s == "downloads" {
+			kindIdx = i
+			break
+		}
+	}
+	if kindIdx < 0 {
+		return nil, "", "", false
+	}
+
+	// Identity k/v pairs precede the kind; must be even count.
+	prefix := segs[:kindIdx]
+	if len(prefix)%2 != 0 {
+		return nil, "", "", false
+	}
+	identity = make(map[string]string, len(prefix)/2)
+	for i := 0; i < len(prefix); i += 2 {
+		identity[prefix[i]] = prefix[i+1]
+	}
+
+	kind = segs[kindIdx]
+	blobName = strings.Join(segs[kindIdx+1:], "/")
+	if blobName == "" {
+		return nil, "", "", false
+	}
+	return identity, kind, blobName, true
 }
 
 // safeBlobName accepts a relative path that may be nested and rejects anything

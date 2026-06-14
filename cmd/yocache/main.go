@@ -257,45 +257,58 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Artifact cache: the build PUTs blobs (build-side uploader) and bitbake's
-	// SSTATE_MIRRORS / PREMIRRORS GET them back. The GET pattern also serves HEAD
-	// (bitbake HEADs an sstate object before fetching). Method-typed patterns are
-	// more specific than the catch-all "/", so they win for these paths; a GET
-	// that finds nothing returns 404, the same void outcome as before, so a miss
-	// still falls back to upstream.
+	// Blob spaces: all methods handled in one place.
+	//
+	// GET / HEAD: both direct (/sstate/<blob>) and identity-prefixed
+	// (/machine/<m>/buildname/<b>/sstate/<blob>) URLs are accepted so the access
+	// log captures whatever context the bbclass embedded in the mirror URL.
+	// http.ServeContent (called inside serveBlob) handles HEAD correctly —
+	// headers only, no body.
+	//
+	// PUT: uploader.py always sends direct /sstate/<blob> paths (identity travels
+	// in X-BitBake-var-* headers); parseIdentityPath handles it correctly
+	// (empty identity map, kind and blob extracted as normal).
 	//
 	// Serving a stored object is unconditionally correct. The sstate "claim vs
 	// available" gating from notes/sstate-upload-hook.md lives on the hashequiv
-	// side (don't advertise a unihash until its object has landed), not here —
-	// follow-up, built on this read side rather than blocking it.
-	mux.HandleFunc("PUT /sstate/", sstate.put)
-	mux.HandleFunc("PUT /downloads/", downloads.put)
-	mux.HandleFunc("GET /sstate/", sstate.get)
-	mux.HandleFunc("GET /downloads/", downloads.get)
-
-	// Any method on the blob spaces that is not GET/HEAD/PUT has no defined
-	// semantics — tell the caller explicitly rather than silently 404ing.
-	methodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
-		log.Warn("method not allowed",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"remote", r.RemoteAddr,
-		)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-	mux.HandleFunc("/sstate/", methodNotAllowed)
-	mux.HandleFunc("/downloads/", methodNotAllowed)
-
-	// Catch-all: anything not matched above is an unrecognised path.
+	// side (don't advertise a unihash until its object has landed), not here.
+	blobStores := map[string]*blobUploader{"sstate": sstate, "downloads": downloads}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Info("unmatched request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"query", r.URL.RawQuery,
-			"ua", r.UserAgent(),
-			"remote", r.RemoteAddr,
-		)
-		http.Error(w, "not found", http.StatusNotFound)
+		identity, kind, blobName, ok := parseIdentityPath(r.URL.Path)
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			if !ok {
+				log.Info("unmatched request",
+					"method", r.Method, "path", r.URL.Path,
+					"query", r.URL.RawQuery, "ua", r.UserAgent(), "remote", r.RemoteAddr,
+				)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			blobStores[kind].serveBlob(w, r, blobName, identity["machine"], identity["buildname"])
+		case http.MethodPut:
+			if !ok {
+				log.Info("unmatched request",
+					"method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr,
+				)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			blobStores[kind].put(w, r)
+		default:
+			if ok {
+				log.Warn("method not allowed",
+					"method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr,
+				)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			} else {
+				log.Info("unmatched request",
+					"method", r.Method, "path", r.URL.Path,
+					"query", r.URL.RawQuery, "ua", r.UserAgent(), "remote", r.RemoteAddr,
+				)
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		}
 	})
 
 	srv := &http.Server{

@@ -84,7 +84,7 @@ func TestBlobPutGetRoundTrip(t *testing.T) {
 
 	// GET returns the bytes.
 	rec := httptest.NewRecorder()
-	u.get(rec, httptest.NewRequest(http.MethodGet, "/sstate/"+name, nil))
+	u.serveBlob(rec, httptest.NewRequest(http.MethodGet, "/sstate/"+name, nil), name, "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want 200", rec.Code)
 	}
@@ -94,7 +94,7 @@ func TestBlobPutGetRoundTrip(t *testing.T) {
 
 	// HEAD returns headers but no body (bitbake HEADs before fetching).
 	rec = httptest.NewRecorder()
-	u.get(rec, httptest.NewRequest(http.MethodHead, "/sstate/"+name, nil))
+	u.serveBlob(rec, httptest.NewRequest(http.MethodHead, "/sstate/"+name, nil), name, "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("head status = %d, want 200", rec.Code)
 	}
@@ -104,7 +104,7 @@ func TestBlobPutGetRoundTrip(t *testing.T) {
 
 	// A path that was never uploaded is a miss -> 404 (void fallback).
 	rec = httptest.NewRecorder()
-	u.get(rec, httptest.NewRequest(http.MethodGet, "/sstate/66/b6/absent.tar.zst", nil))
+	u.serveBlob(rec, httptest.NewRequest(http.MethodGet, "/sstate/66/b6/absent.tar.zst", nil), "66/b6/absent.tar.zst", "", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("get miss status = %d, want 404", rec.Code)
 	}
@@ -592,5 +592,58 @@ func TestPutQuotaConcurrentExclusion(t *testing.T) {
 	}
 	if got := qt.Used(); got != int64(len(payload)) {
 		t.Errorf("used = %d after concurrent uploads, want %d", got, len(payload))
+	}
+}
+
+func TestParseIdentityPath(t *testing.T) {
+	cases := []struct {
+		path      string
+		wantOK    bool
+		wantKind  string
+		wantBlob  string
+		wantIdent map[string]string
+	}{
+		// no identity prefix — direct /sstate/ and /downloads/ forms
+		{"/sstate/foo.tar.zst", true, "sstate", "foo.tar.zst", map[string]string{}},
+		{"/downloads/bar.tar.gz", true, "downloads", "bar.tar.gz", map[string]string{}},
+		// nested blob path (sstate layout: hash[:2]/hash[2:4]/file)
+		{"/sstate/14/ae/foo.tar.zst", true, "sstate", "14/ae/foo.tar.zst", map[string]string{}},
+		// single identity key before kind
+		{"/machine/qemux86-64/sstate/foo.tar.zst", true, "sstate", "foo.tar.zst", map[string]string{"machine": "qemux86-64"}},
+		// two identity keys before kind
+		{"/machine/qemux86-64/buildname/20260523/sstate/14/ae/foo.tar.zst", true, "sstate", "14/ae/foo.tar.zst", map[string]string{"machine": "qemux86-64", "buildname": "20260523"}},
+		// downloads with prefix
+		{"/machine/qemux86-64/downloads/bar.tar.gz", true, "downloads", "bar.tar.gz", map[string]string{"machine": "qemux86-64"}},
+		// odd-length prefix (key without value before kind) — malformed
+		{"/machine/sstate/foo.tar.zst", false, "", "", nil},
+		// no kind sentinel at all
+		{"/foo/bar", false, "", "", nil},
+		// missing blob name after kind
+		{"/sstate/", false, "", "", nil},
+		{"/machine/qemux86-64/sstate/", false, "", "", nil},
+	}
+	for _, c := range cases {
+		identity, kind, blob, ok := parseIdentityPath(c.path)
+		if ok != c.wantOK {
+			t.Errorf("parseIdentityPath(%q): ok=%v, want %v", c.path, ok, c.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if kind != c.wantKind {
+			t.Errorf("parseIdentityPath(%q): kind=%q, want %q", c.path, kind, c.wantKind)
+		}
+		if blob != c.wantBlob {
+			t.Errorf("parseIdentityPath(%q): blob=%q, want %q", c.path, blob, c.wantBlob)
+		}
+		for k, v := range c.wantIdent {
+			if got := identity[k]; got != v {
+				t.Errorf("parseIdentityPath(%q): identity[%q]=%q, want %q", c.path, k, got, v)
+			}
+		}
+		if len(identity) != len(c.wantIdent) {
+			t.Errorf("parseIdentityPath(%q): identity has %d keys, want %d", c.path, len(identity), len(c.wantIdent))
+		}
 	}
 }

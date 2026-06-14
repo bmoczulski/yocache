@@ -137,35 +137,42 @@ func (l *Ledger) RecordArtifactAdded(kind, path string, size int64, buildID, mac
 
 // artifactFetchedDetails is the details payload for artifact.fetched.
 type artifactFetchedDetails struct {
-	Kind string `json:"kind"`
-	Path string `json:"path"`
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	Machine   string `json:"machine,omitempty"`    // from identity path prefix, if present
+	BuildName string `json:"build_name,omitempty"` // from identity path prefix, if present
 }
 
 // RecordArtifactFetched records that a stored blob was served to a client (a
-// cache hit on GET).
-func (l *Ledger) RecordArtifactFetched(kind, path, buildID string) {
+// cache hit on GET). machine and buildName are parsed from the identity path
+// prefix when the request used a prefixed URL; empty otherwise.
+func (l *Ledger) RecordArtifactFetched(kind, path, buildID, machine, buildName string) {
 	l.write(ledgerEntry{
 		Ts:      time.Now().UTC(),
 		Type:    "artifact.fetched",
 		BuildID: buildID,
-		Details: l.marshalDetails(artifactFetchedDetails{Kind: kind, Path: path}),
+		Details: l.marshalDetails(artifactFetchedDetails{Kind: kind, Path: path, Machine: machine, BuildName: buildName}),
 	})
 }
 
 // artifactMissedDetails is the details payload for artifact.missed.
 type artifactMissedDetails struct {
-	Kind string `json:"kind"`
-	Path string `json:"path"`
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	Machine   string `json:"machine,omitempty"`    // from identity path prefix, if present
+	BuildName string `json:"build_name,omitempty"` // from identity path prefix, if present
 }
 
 // RecordArtifactMissed records that a lookup found no stored blob (a cache
-// miss on GET/HEAD — bitbake will fall back to the upstream mirror).
-func (l *Ledger) RecordArtifactMissed(kind, path, buildID string) {
+// miss on GET/HEAD — bitbake will fall back to the upstream mirror). machine
+// and buildName are parsed from the identity path prefix when the request used
+// a prefixed URL; empty otherwise.
+func (l *Ledger) RecordArtifactMissed(kind, path, buildID, machine, buildName string) {
 	l.write(ledgerEntry{
 		Ts:      time.Now().UTC(),
 		Type:    "artifact.missed",
 		BuildID: buildID,
-		Details: l.marshalDetails(artifactMissedDetails{Kind: kind, Path: path}),
+		Details: l.marshalDetails(artifactMissedDetails{Kind: kind, Path: path, Machine: machine, BuildName: buildName}),
 	})
 }
 
