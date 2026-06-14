@@ -187,6 +187,12 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 			// are stable) and skip — no need to re-transfer what we already hold.
 			u.log.Info("upload: already exists, skipping",
 				"kind", u.kind, "name", name, "remote", r.RemoteAddr)
+			if u.inventory != nil {
+				if err := u.inventory.Touch(u.kind, name); err != nil {
+					u.log.Warn("upload: already exists: inventory touch failed",
+						"kind", u.kind, "name", name, "err", err)
+				}
+			}
 			w.WriteHeader(http.StatusPreconditionFailed)
 			return
 		}
