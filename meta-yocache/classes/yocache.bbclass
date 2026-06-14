@@ -202,6 +202,12 @@ YOCACHE_SKIP_UPLOAD ??= "0"
 #   YOCACHE_SKIP_UPLOAD_TYPES = "sstate downloads"  # upload nothing (same effect as YOCACHE_SKIP_UPLOAD = "1")
 YOCACHE_SKIP_UPLOAD_TYPES ??= ""
 
+# Space-separated list of recipe names (PN) to exclude from all cache uploads.
+# A build-side complement to the server's --block-recipe flag: recipes known to
+# produce non-reproducible or broken artifacts are silently skipped before any
+# socket or network I/O rather than being rejected after the fact at the server.
+YOCACHE_BLOCK_RECIPES ??= ""
+
 # Size of the cooker uploader's PUT worker pool.
 YOCACHE_UPLOAD_THREADS ??= "4"
 
@@ -537,6 +543,10 @@ python yocache_notify_sstate () {
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
     try:
+        _blocked = (d.getVar("YOCACHE_BLOCK_RECIPES") or "").split()
+        if _blocked and (d.getVar("PN") or "") in _blocked:
+            bb.note("yocache: skipping sstate upload for blocked recipe %s" % d.getVar("PN"))
+            return
         from yocache import uploader
         path = d.getVar("SSTATE_PKG")
         if not (path and os.path.exists(path)):
@@ -601,6 +611,10 @@ python yocache_notify_dl () {
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
     try:
+        _blocked = (d.getVar("YOCACHE_BLOCK_RECIPES") or "").split()
+        if _blocked and (d.getVar("PN") or "") in _blocked:
+            bb.note("yocache: skipping downloads upload for blocked recipe %s" % d.getVar("PN"))
+            return
         import bb.fetch2
         from yocache import uploader
         src_uri = (d.getVar("SRC_URI") or "").split()
