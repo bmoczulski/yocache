@@ -628,14 +628,14 @@ python yocache_notify_dl () {
         if _blocked and (d.getVar("PN") or "") in _blocked:
             bb.note("yocache: skipping downloads upload for blocked recipe %s" % d.getVar("PN"))
             return
-        import bb.fetch2
+        from bb import fetch2
         from yocache import uploader
         src_uri = (d.getVar("SRC_URI") or "").split()
         if not src_uri:
             return
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
         recipe_meta = {var: d.getVar(var) for var in uploader._RECIPE_META_VARS}
-        fetcher = bb.fetch2.Fetch(src_uri, d)
+        fetcher = fetch2.Fetch(src_uri, d)
         seen = set()
         # Bitbake stores recipe-declared checksums as ud.<algo>_expected after
         # verifying them in do_fetch.  These are only meaningful for the actual
