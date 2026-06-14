@@ -129,19 +129,42 @@ def _yocache_identity_prefix(d):
 YOCACHE_DL_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}downloads/${YOCACHE_URL_REPLACEMENTS}"
 YOCACHE_SS_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
 
-YOCACHE_PREMIRRORS = "\
-cvs://.*/.*     ${YOCACHE_DL_URL} \n \
-svn://.*/.*     ${YOCACHE_DL_URL} \n \
-git://.*/.*     ${YOCACHE_DL_URL} \n \
-gitsm://.*/.*   ${YOCACHE_DL_URL} \n \
-hg://.*/.*      ${YOCACHE_DL_URL} \n \
-bzr://.*/.*     ${YOCACHE_DL_URL} \n \
-p4://.*/.*      ${YOCACHE_DL_URL} \n \
-osc://.*/.*     ${YOCACHE_DL_URL} \n \
-https?://.*/.*  ${YOCACHE_DL_URL} \n \
-ftp://.*/.*     ${YOCACHE_DL_URL} \n \
-npm://.*/?.*    ${YOCACHE_DL_URL} \n \
-"
+# Build PREMIRRORS dynamically: only include protocols whose fetch2 module is
+# present in this bitbake version. cvs/bzr/osc were dropped in modern bitbake;
+# rather than hard-coding which version removed them, probe via importlib so
+# this adapts automatically as modules come and go.
+def _yocache_premirrors(d):
+    import importlib
+    dl_url = d.getVar("YOCACHE_DL_URL")
+    # (premirror pattern, bb.fetch2.<module> that handles it)
+    candidates = [
+        ("svn://.*/.*",    "svn"),
+        ("git://.*/.*",    "git"),
+        ("gitsm://.*/.*",  "gitsm"),
+        ("hg://.*/.*",     "hg"),
+        ("p4://.*/.*",     "perforce"),
+        ("https?://.*/.*", "wget"),
+        ("ftp://.*/.*",    "wget"),
+        ("npm://.*/?.*",   "npm"),
+        # Legacy protocols removed in modern bitbake — included only if present.
+        ("cvs://.*/.*",    "cvs"),
+        ("bzr://.*/.*",    "bzr"),
+        ("osc://.*/.*",    "osc"),
+    ]
+    seen = {}
+    lines = []
+    for pattern, module in candidates:
+        if module not in seen:
+            try:
+                importlib.import_module("bb.fetch2." + module)
+                seen[module] = True
+            except ImportError:
+                seen[module] = False
+        if seen[module]:
+            lines.append("%s    %s" % (pattern, dl_url))
+    return " \\n ".join(lines) + " \\n "
+
+YOCACHE_PREMIRRORS = "${@_yocache_premirrors(d)}"
 YOCACHE_SS_MIRRORS = "file://.* ${YOCACHE_SS_URL} \n "
 
 # Dunfell..Honister require _prepend; Kirkstone+ require :prepend.
