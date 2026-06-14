@@ -98,11 +98,12 @@ class Uploader:
     upload must never break a build.
     """
 
-    def __init__(self, sock_path, base_url, threads, skip, build_meta=None):
+    def __init__(self, sock_path, base_url, threads, skip, build_meta=None, skip_types=None):
         self.sock_path = sock_path
         self.base_url = base_url.rstrip("/")
         self.threads = max(1, int(threads))
         self.skip = skip
+        self.skip_types = frozenset(skip_types or ())
         self.build_meta = build_meta or {}
         self.state = IDLE
         self._queue = queue.Queue()
@@ -140,9 +141,13 @@ class Uploader:
             self._workers.append(t)
 
         self.state = RUNNING
+        skip_note = ""
+        if self.skip:
+            skip_note = ", dry-run"
+        elif self.skip_types:
+            skip_note = ", skipping %s" % "/".join(sorted(self.skip_types))
         _note("listening on %s -> %s (%d workers%s)" % (
-            self.sock_path, self.base_url, self.threads,
-            ", dry-run" if self.skip else ""))
+            self.sock_path, self.base_url, self.threads, skip_note))
 
     def stop(self, timeout=_DRAIN_TIMEOUT):
         if self.state != RUNNING:
@@ -246,6 +251,9 @@ class Uploader:
         if self.skip:
             _note("dry-run, would PUT %s (%s)" % (url, path))
             return
+        if kind in self.skip_types:
+            _note("skip-type %s, would PUT %s (%s)" % (kind, url, path))
+            return
         try:
             size = os.path.getsize(path)
         except OSError as exc:
@@ -316,12 +324,15 @@ def start(d):
         base_url = d.getVar("YOCACHE_URL") or "http://localhost:6768"
         threads = d.getVar("YOCACHE_UPLOAD_THREADS") or "4"
         skip = bb.utils.to_boolean(d.getVar("YOCACHE_SKIP_UPLOAD"))
+        # Normalize "sstate-cache" -> "sstate" so both spellings work.
+        raw_types = (d.getVar("YOCACHE_SKIP_UPLOAD_TYPES") or "").split()
+        skip_types = {"sstate" if t == "sstate-cache" else t for t in raw_types}
         if not sock_path:
             _warn("YOCACHE_UPLOAD_SOCK unset; uploader not started")
             return
 
         build_meta = {var: d.getVar(var) for var in _BUILD_META_VARS}
-        up = Uploader(sock_path, base_url, threads, skip, build_meta)
+        up = Uploader(sock_path, base_url, threads, skip, build_meta, skip_types)
         try:
             up.start()
         except Exception as exc:
