@@ -112,8 +112,22 @@ YOCACHE_URL_REPLACEMENTS = "PATH"
 # URL is not repeated per-protocol. Direct PREMIRRORS prepend avoids touching
 # SOURCE_MIRROR_URL, which collapses multi-URL mirrors into 3-token lines that
 # bitbake rejects with "should have paired members".
-YOCACHE_DL_URL = "${YOCACHE_URL}/downloads/${YOCACHE_URL_REPLACEMENTS}"
-YOCACHE_SS_URL = "${YOCACHE_URL}/sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
+#
+# Identity prefix: the server can't read X-* headers from bitbake's internal
+# mirror fetcher, so build context is embedded as /key/value/ path segments
+# before the kind sentinel ("sstate" or "downloads"). All keys are optional;
+# missing values are silently omitted. The prefix is signature-neutral —
+# SSTATE_MIRRORS and PREMIRRORS never enter a task hash (verified in sstate.bbclass).
+def _yocache_identity_prefix(d):
+    parts = []
+    for key, var in [("machine", "MACHINE"), ("buildname", "BUILDNAME")]:
+        val = (d.getVar(var) or "").strip()
+        if val:
+            parts += [key, val]
+    return "/".join(parts) + "/" if parts else ""
+
+YOCACHE_DL_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}downloads/${YOCACHE_URL_REPLACEMENTS}"
+YOCACHE_SS_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
 
 YOCACHE_PREMIRRORS = "\
 cvs://.*/.*     ${YOCACHE_DL_URL} \n \
