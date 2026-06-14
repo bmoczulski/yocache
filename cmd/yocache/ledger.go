@@ -112,19 +112,26 @@ func (l *Ledger) marshalDetails(v any) json.RawMessage {
 
 // artifactAddedDetails is the details payload for artifact.added.
 type artifactAddedDetails struct {
-	Kind string `json:"kind"` // "sstate" or "downloads"
-	Path string `json:"path"` // relative path inside the store
-	Size int64  `json:"size"` // bytes written
+	Kind      string `json:"kind"`                 // "sstate" or "downloads"
+	Path      string `json:"path"`                 // relative path inside the store
+	Size      int64  `json:"size"`                 // bytes written
+	Machine   string `json:"machine,omitempty"`    // X-BitBake-var-MACHINE from the PUT request
+	Distro    string `json:"distro,omitempty"`     // X-BitBake-var-DISTRO from the PUT request
+	BuildName string `json:"build_name,omitempty"` // X-BitBake-var-BUILDNAME from the PUT request
 }
 
 // RecordArtifactAdded records that a blob was successfully stored (after a PUT
-// committed). size is the number of bytes written to disk.
-func (l *Ledger) RecordArtifactAdded(kind, path string, size int64, buildID string) {
+// committed). size is the number of bytes written to disk. machine, distro, and
+// buildName are extracted from X-BitBake-var-* request headers when present.
+func (l *Ledger) RecordArtifactAdded(kind, path string, size int64, buildID, machine, distro, buildName string) {
 	l.write(ledgerEntry{
 		Ts:      time.Now().UTC(),
 		Type:    "artifact.added",
 		BuildID: buildID,
-		Details: l.marshalDetails(artifactAddedDetails{Kind: kind, Path: path, Size: size}),
+		Details: l.marshalDetails(artifactAddedDetails{
+			Kind: kind, Path: path, Size: size,
+			Machine: machine, Distro: distro, BuildName: buildName,
+		}),
 	})
 }
 

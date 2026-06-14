@@ -320,8 +320,19 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 	committed = true
 
-	u.log.Info("cache upload stored", "kind", u.kind, "name", name, "bytes", n, "remote", r.RemoteAddr)
-	u.ledger.RecordArtifactAdded(u.kind, name, n, "")
+	machine := r.Header.Get("X-BitBake-var-MACHINE")
+	distro := r.Header.Get("X-BitBake-var-DISTRO")
+	buildName := r.Header.Get("X-BitBake-var-BUILDNAME")
+
+	logAttrs := []any{"kind", u.kind, "name", name, "bytes", n, "remote", r.RemoteAddr}
+	if machine != "" {
+		logAttrs = append(logAttrs, "machine", machine)
+	}
+	if distro != "" {
+		logAttrs = append(logAttrs, "distro", distro)
+	}
+	u.log.Info("cache upload stored", logAttrs...)
+	u.ledger.RecordArtifactAdded(u.kind, name, n, "", machine, distro, buildName)
 	if u.inventory != nil {
 		if err := u.inventory.Upsert(u.kind, name, n); err != nil {
 			u.log.Warn("upload: inventory upsert failed", "kind", u.kind, "name", name, "err", err)
