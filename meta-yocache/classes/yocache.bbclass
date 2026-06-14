@@ -108,48 +108,37 @@ YOCACHE_LOG_LIMIT ??= "10"
 YOCACHE_URL_REPLACEMENTS = "PATH"
 
 # --- DL (downloads) + sstate mirror wiring --------------------------------
-# Prepend yocache directly to PREMIRRORS/SSTATE_MIRRORS using the bitbake
-# DataSmart Python API (d.prependVar / d.appendVar) rather than any text
-# operator syntax.  _prepend/_append is native to Dunfell but was removed
-# in Scarthgap; :prepend/:append was introduced in Kirkstone and is unknown
-# to Dunfell.  The Python API is version-agnostic: it manipulates the
-# internal flag mechanism directly, bypassing the text-syntax split.
-#
-# For PREMIRRORS specifically: own-mirrors + SOURCE_MIRROR_URL += would
-# collapse multiple mirror URLs into one string and emit 3-token PREMIRRORS
-# lines ("pattern url1 url2") that bitbake rejects with "should have paired
-# members".  Direct PREMIRRORS manipulation avoids touching SOURCE_MIRROR_URL.
-#
-# The anonymous Python function also handles SSTATEPOSTCREATEFUNCS (see the
-# "Artifact upload" section below for the rationale — same as before, just
-# expressed via d.appendVar instead of a text operator).
+# Composed once here; the inc files below use them via ${...} expansion so the
+# URL is not repeated per-protocol. Direct PREMIRRORS prepend avoids touching
+# SOURCE_MIRROR_URL, which collapses multi-URL mirrors into 3-token lines that
+# bitbake rejects with "should have paired members".
+YOCACHE_DL_URL = "${YOCACHE_URL}/downloads/${YOCACHE_URL_REPLACEMENTS}"
+YOCACHE_SS_URL = "${YOCACHE_URL}/sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
+
+YOCACHE_PREMIRRORS = "\
+cvs://.*/.*     ${YOCACHE_DL_URL} \n \
+svn://.*/.*     ${YOCACHE_DL_URL} \n \
+git://.*/.*     ${YOCACHE_DL_URL} \n \
+gitsm://.*/.*   ${YOCACHE_DL_URL} \n \
+hg://.*/.*      ${YOCACHE_DL_URL} \n \
+bzr://.*/.*     ${YOCACHE_DL_URL} \n \
+p4://.*/.*      ${YOCACHE_DL_URL} \n \
+osc://.*/.*     ${YOCACHE_DL_URL} \n \
+https?://.*/.*  ${YOCACHE_DL_URL} \n \
+ftp://.*/.*     ${YOCACHE_DL_URL} \n \
+npm://.*/?.*    ${YOCACHE_DL_URL} \n \
+"
+YOCACHE_SS_MIRRORS = "file://.* ${YOCACHE_SS_URL} \n "
+
+# Dunfell..Honister require _prepend; Kirkstone+ require :prepend.
+# LAYERSERIES_CORENAMES is set by meta/conf/layer.conf and is available here.
+include classes/${@'yocache-mirrors-compat.inc' if bb.utils.filter('LAYERSERIES_CORENAMES', 'dunfell gatesgarth hardknott honister', d) else 'yocache-mirrors-new.inc'}
+
 python () {
-    yocache_url = d.getVar("YOCACHE_URL") or ""
-    repl        = d.getVar("YOCACHE_URL_REPLACEMENTS") or ""
-
-    dl_url = "{}/downloads/{}".format(yocache_url, repl)
-    d.prependVar("PREMIRRORS",
-        "cvs://.*/.*     {0} \n "
-        "svn://.*/.*     {0} \n "
-        "git://.*/.*     {0} \n "
-        "gitsm://.*/.*   {0} \n "
-        "hg://.*/.*      {0} \n "
-        "bzr://.*/.*     {0} \n "
-        "p4://.*/.*      {0} \n "
-        "osc://.*/.*     {0} \n "
-        "https?://.*/.*  {0} \n "
-        "ftp://.*/.*     {0} \n "
-        "npm://.*/?.*    {0} \n ".format(dl_url)
-    )
-
-    ss_url = "{}/sstate/{};downloadfilename=PATH".format(yocache_url, repl)
-    d.prependVar("SSTATE_MIRRORS", "file://.* {} \n ".format(ss_url))
-
-    # SSTATEPOSTCREATEFUNCS: append the sstate upload notify hook.
+    # SSTATEPOSTCREATEFUNCS: must be set via d.appendVar, not a text operator.
     # sstate.bbclass hard-assigns SSTATEPOSTCREATEFUNCS = "" at parse time;
-    # this anonymous function runs after all static class assignments, so
-    # d.appendVar() records the flag after that hard assignment and it
-    # survives to expansion time when sstate_package() reads the variable.
+    # this anonymous function runs after that, so d.appendVar() survives to
+    # expansion time when sstate_package() reads the variable.
     d.appendVar("SSTATEPOSTCREATEFUNCS", " yocache_notify_sstate")
 }
 
