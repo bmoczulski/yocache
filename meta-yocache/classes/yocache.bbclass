@@ -206,6 +206,11 @@ python yocache_eventhandler () {
 
     d = e.data
 
+    import sys
+    _yclib = d.getVar('YOCACHE_LAYER_LIBDIR')
+    if _yclib and _yclib not in sys.path:
+        sys.path.insert(0, _yclib)
+
     # One-time setup gate: complain LOUDLY (but never abort) if "toaster" is
     # missing from the global INHERIT. MissedSstate — yocache's richest sstate
     # hit/miss signal — is fired by sstate.bbclass only when "toaster" is in
@@ -504,7 +509,10 @@ yocache_eventhandler[eventmask] = "${YOCACHE_EVENTS}"
 # sstate.bbclass). A fully usable mirror needs the sidecars too: bitbake HEADs
 # <pkg>.siginfo on every restore, and <pkg>.sig when sstate is signed.
 python yocache_notify_sstate () {
-    import os
+    import os, sys
+    _yclib = d.getVar('YOCACHE_LAYER_LIBDIR')
+    if _yclib and _yclib not in sys.path:
+        sys.path.insert(0, _yclib)
     try:
         from yocache import uploader
         path = d.getVar("SSTATE_PKG")
@@ -565,7 +573,10 @@ sstate_package[vardepsexclude] += "yocache_notify_sstate"
 # Reconstructs the Fetch object the same way base_do_fetch does, then notifies
 # whichever of each url's localpath/fullmirror/fullshallow exist on disk.
 python yocache_notify_dl () {
-    import os
+    import os, sys
+    _yclib = d.getVar('YOCACHE_LAYER_LIBDIR')
+    if _yclib and _yclib not in sys.path:
+        sys.path.insert(0, _yclib)
     try:
         import bb.fetch2
         from yocache import uploader
