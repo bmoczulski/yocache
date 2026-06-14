@@ -129,6 +129,10 @@ def _yocache_identity_prefix(d):
 YOCACHE_DL_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}downloads/${YOCACHE_URL_REPLACEMENTS}"
 YOCACHE_SS_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
 
+def _yocache_skip_fetch(d, kind):
+    types = (d.getVar("YOCACHE_SKIP_FETCH_TYPES") or "").split()
+    return "all" in types or kind in types or ("sstate-cache" in types and kind == "sstate")
+
 # Build PREMIRRORS dynamically: only include protocols whose fetch2 module is
 # present in this bitbake version. cvs/bzr/osc were dropped in modern bitbake;
 # rather than hard-coding which version removed them, probe via importlib so
@@ -164,8 +168,8 @@ def _yocache_premirrors(d):
             lines.append("%s    %s" % (pattern, dl_url))
     return " \\n ".join(lines) + " \\n "
 
-YOCACHE_PREMIRRORS = "${@_yocache_premirrors(d)}"
-YOCACHE_SS_MIRRORS = "file://.* ${YOCACHE_SS_URL} \n "
+YOCACHE_PREMIRRORS = "${@'' if _yocache_skip_fetch(d, 'downloads') else _yocache_premirrors(d)}"
+YOCACHE_SS_MIRRORS = "${@'' if _yocache_skip_fetch(d, 'sstate') else 'file://.* ' + d.getVar('YOCACHE_SS_URL') + ' \\n '}"
 
 # Dunfell..Honister require _prepend; Kirkstone+ require :prepend.
 # LAYERSERIES_CORENAMES is set by meta/conf/layer.conf and is available here.
@@ -201,6 +205,15 @@ YOCACHE_SKIP_UPLOAD ??= "0"
 #   YOCACHE_SKIP_UPLOAD_TYPES = "sstate"      # only suppress sstate uploads
 #   YOCACHE_SKIP_UPLOAD_TYPES = "all"         # upload nothing (shortcut for "sstate downloads")
 YOCACHE_SKIP_UPLOAD_TYPES ??= ""
+
+# Per-type fetch opt-out: omit the relevant PREMIRRORS / SSTATE_MIRRORS entry so
+# bitbake never tries yocache for that artifact type. Use on CI builders that
+# should populate the cache but never read from it (cold builds must stay cold).
+# Valid values: "sstate" (or "sstate-cache"), "downloads", "all". Example:
+#   YOCACHE_SKIP_FETCH_TYPES = "downloads"    # fetch sstate from cache; never DL from it
+#   YOCACHE_SKIP_FETCH_TYPES = "sstate"       # fetch DL from cache; never sstate from it
+#   YOCACHE_SKIP_FETCH_TYPES = "all"          # populate-only; never read from yocache
+YOCACHE_SKIP_FETCH_TYPES ??= ""
 
 # Space-separated list of recipe names (PN) to exclude from all cache uploads.
 # A build-side complement to the server's --block-recipe flag: recipes known to
