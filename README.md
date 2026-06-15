@@ -35,25 +35,25 @@ repos:
     url: https://github.com/bmoczulski/yocache.git
     refspec: main
     layers:
-      - meta-yocache
-```
+      meta-yocache:
 
-Then in `local.conf` (or a conf file included by your kasfile):
+local_conf_header:
+  yocache: |
+    YOCACHE_URL = "http://localhost:6768"
 
-```
-INHERIT += "yocache"
-YOCACHE_URL = "http://yourcache.local:6768"
-INHERIT += "toaster"   # enables richer sstate hit/miss events
-```
+    # OPTIONAL: use YoCache web-socket for hash-equiv in Yocto >= Kirkstone
+    # BB_HASHSERVE = "${@'ws://localhost:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'auto'}"
 
-For hash-equivalence (requires Scarthgap / Yocto 5.0+ / bitbake 2.8):
+    # "toaster" is necessary for YoCache to harvest MissedSstate events
+    INHERIT += "toaster"
 
-```
-BB_HASHSERVE = "ws://yourcache.local:6768/hashequiv"
-```
+    # Toaster server suggests to enable build history with commits
+    INHERIT += "buildhistory"
+    BUILDHISTORY_COMMIT = "1"
 
-`BB_HASHSERVE` must live in `local.conf` — bitbake's cooker reads it before
-per-recipe classes load.
+    # The juice!
+    INHERIT += "yocache"
+```
 
 ### Without kas (manual bblayers.conf)
 
