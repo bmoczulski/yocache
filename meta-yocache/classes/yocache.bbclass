@@ -647,6 +647,28 @@ python yocache_notify_dl () {
             ud = fetcher.ud[u]
             if ud.type == "file":
                 continue
+            # Repack the full mirror tarball if the local bare clone is newer.
+            # Without this, a builder that warms from yocache and then fetches
+            # upstream updates will never refresh the tarball (bitbake's
+            # build_mirror_data guard is "not os.path.exists(fullmirror)").
+            if (getattr(ud, 'write_tarballs', False)
+                    and getattr(ud, 'fullmirror', None)
+                    and getattr(ud, 'localpath', None)
+                    and os.path.isfile(ud.fullmirror)
+                    and os.path.exists(ud.localpath)
+                    and os.path.getmtime(ud.localpath) > os.path.getmtime(ud.fullmirror)):
+                _tmp = ud.fullmirror + ".yocache-repack"
+                try:
+                    os.rename(ud.fullmirror, _tmp)
+                    ud.method.build_mirror_data(ud, d)
+                    bb.note("yocache: repacked stale mirror tarball %s" % os.path.basename(ud.fullmirror))
+                except Exception as _e:
+                    bb.warn("yocache: repack of %s failed: %s" % (os.path.basename(ud.fullmirror), _e))
+                    if os.path.exists(_tmp) and not os.path.exists(ud.fullmirror):
+                        os.rename(_tmp, ud.fullmirror)
+                else:
+                    if os.path.exists(_tmp):
+                        os.remove(_tmp)
             localpath_checksums = {
                 algo: getattr(ud, algo + "_expected", None) or ""
                 for algo in _CHECKSUM_ATTRS
