@@ -173,7 +173,7 @@ YOCACHE_SS_MIRRORS = "${@'' if _yocache_skip_fetch(d, 'sstate') else 'file://.* 
 
 # Dunfell..Honister require _prepend; Kirkstone+ require :prepend.
 # LAYERSERIES_CORENAMES is set by meta/conf/layer.conf and is available here.
-include classes/${@'yocache-mirrors-compat.inc' if bb.utils.filter('LAYERSERIES_CORENAMES', 'dunfell gatesgarth hardknott honister', d) else 'yocache-mirrors-new.inc'}
+require classes/${@'yocache-mirrors-compat.inc' if bb.utils.filter('LAYERSERIES_CORENAMES', 'dunfell gatesgarth hardknott honister', d) else 'yocache-mirrors-new.inc'}
 
 python () {
     # SSTATEPOSTCREATEFUNCS: must be set via d.appendVar, not a text operator.
