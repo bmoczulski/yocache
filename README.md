@@ -41,7 +41,7 @@ local_conf_header:
   yocache: |
     YOCACHE_URL = "http://localhost:6768"
 
-    # OPTIONAL: use YoCache web-socket for hash-equiv in Yocto >= Kirkstone
+    # OPTIONAL: use YoCache web-socket for hash-equiv in Yocto >= Scarthgap
     # BB_HASHSERVE = "${@'ws://localhost:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'auto'}"
 
     # "toaster" is necessary for YoCache to harvest MissedSstate events
