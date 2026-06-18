@@ -155,7 +155,9 @@ func main() {
 	}
 	qt.seed(*downloadsDir, *sstateDir)
 	if qt.limit > 0 {
-		log.Info("storage quota active", "limit_bytes", qt.limit, "used_bytes", qt.Used())
+		log.Info("storage quota active",
+			"limit_bytes", qt.limit, "limit", humanize.Bytes(uint64(qt.limit)),
+			"used_bytes", qt.Used(), "used", humanize.Bytes(uint64(qt.Used())))
 	} else {
 		log.Info("storage quota disabled (unlimited)")
 	}
