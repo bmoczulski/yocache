@@ -132,6 +132,20 @@ func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledg
 
 // put handles PUT /<kind>/<name>.
 func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
+	// A client not using Expect: 100-continue may already be streaming its
+	// body when we respond early (e.g. 412 "already have it"). Left unread,
+	// Go closes the connection once the handler returns, and closing a
+	// socket with unread bytes still in the kernel receive buffer makes the
+	// OS send RST instead of FIN — surfacing to the client as "connection
+	// reset by peer"/"broken pipe" mid-write. Draining first lets it close
+	// cleanly. Skip this when the client sent Expect: 100-continue: draining
+	// there would read r.Body and trigger Go's own automatic 100-continue
+	// response, telling the client to send data we may be about to reject —
+	// defeating the point of two-phase negotiation.
+	if !expectsContinue(r) {
+		defer func() { _, _ = io.Copy(io.Discard, r.Body) }()
+	}
+
 	name := strings.TrimPrefix(r.URL.Path, "/"+u.kind+"/")
 	if !safeBlobName(name) {
 		u.log.Warn("upload: rejected name", "kind", u.kind, "path", r.URL.Path, "remote", r.RemoteAddr)
@@ -400,6 +414,20 @@ func (u *blobUploader) miss(w http.ResponseWriter, r *http.Request, name, machin
 	u.log.Info("cache miss", logAttrs...)
 	u.accessLog.RecordArtifactMissed(u.kind, name, "", machine, buildName)
 	http.NotFound(w, r)
+}
+
+// expectsContinue reports whether r declared "Expect: 100-continue" — the
+// client is waiting for permission before sending its body. Reading r.Body
+// on such a request triggers Go's automatic "100 Continue" response,
+// telling the client to send data the handler may be about to reject
+// anyway — so early-exit paths must not drain in that case.
+func expectsContinue(r *http.Request) bool {
+	for _, v := range strings.Split(r.Header.Get("Expect"), ",") {
+		if strings.EqualFold(strings.TrimSpace(v), "100-continue") {
+			return true
+		}
+	}
+	return false
 }
 
 // isGrowingVCSTarball reports whether name is a VCS mirror tarball whose
