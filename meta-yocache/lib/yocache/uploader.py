@@ -297,6 +297,10 @@ class Uploader:
         except urllib.error.HTTPError as exc:
             if exc.code == 412:
                 _note("skipped %s (server already has it)" % url)
+            elif exc.code == 409:
+                existing = exc.headers.get("X-Yocache-Existing-Size")
+                _note("PUT %s failed (%s): local=%d bytes, existing=%s bytes" %
+                      (url, exc, size, existing))
             else:
                 # 501 from the current server stub lands here too — expected
                 # until storage is implemented; keep it quiet (note, not warn).

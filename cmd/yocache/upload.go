@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -179,7 +180,9 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 					"kind", u.kind, "name", name,
 					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
 					"remote", r.RemoteAddr)
-				http.Error(w, "conflict: stored blob has different size", http.StatusConflict)
+				// Existing size for the benefit of client-side logging.
+				w.Header().Set("X-Yocache-Existing-Size", strconv.FormatInt(stored.Size(), 10))
+				http.Error(w, fmt.Sprintf("conflict: existing blob is %d bytes, proposed is %d bytes", stored.Size(), r.ContentLength), http.StatusConflict)
 				return
 			}
 		} else {
