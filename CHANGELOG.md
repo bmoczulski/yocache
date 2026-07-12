@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `GET /api/stats` — JSON cache inventory summary (file counts, deduplicated
+  sstate recipe count, cumulative size per category), computed live from the
+  inventory DB so it can be polled at will instead of only at startup.
+
 ## v0.1.2 - 2026-07-12
 
 ### Fixed

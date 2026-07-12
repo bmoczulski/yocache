@@ -221,6 +221,7 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
 	mux.HandleFunc("GET /version", versionHandler(ver))
+	mux.HandleFunc("GET /api/stats", statsHandler(inv, log))
 
 	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -64,24 +66,72 @@ func sstateChecksum(path string) string {
 	return base
 }
 
+// cacheStats is the file-count/size summary shared by the startup log line
+// and the /api/stats endpoint. Sizes are duplicated as exact bytes and a
+// human-readable form so either can be consumed without reformatting.
+type cacheStats struct {
+	DownloadsFiles int64  `json:"downloads_files"`
+	DownloadsBytes int64  `json:"downloads_bytes"`
+	DownloadsSize  string `json:"downloads_size,omitempty"`
+	SstateFiles    int64  `json:"sstate_files"`
+	SstateRecipes  int64  `json:"sstate_recipes"`
+	SstateBytes    int64  `json:"sstate_bytes"`
+	SstateSize     string `json:"sstate_size,omitempty"`
+}
+
+// computeCacheStats queries the inventory DB live, so it reflects uploads and
+// evictions that happened since startup, not just the state at boot.
+func computeCacheStats(inv *blobInventory) (cacheStats, error) {
+	dlFiles, dlBytes, err := inv.CategoryStats("downloads")
+	if err != nil {
+		return cacheStats{}, err
+	}
+	ssFiles, ssRecipes, ssBytes, err := inv.SstateStats()
+	if err != nil {
+		return cacheStats{}, err
+	}
+	return cacheStats{
+		DownloadsFiles: dlFiles,
+		DownloadsBytes: dlBytes,
+		DownloadsSize:  humanize.Bytes(uint64(dlBytes)),
+		SstateFiles:    ssFiles,
+		SstateRecipes:  ssRecipes,
+		SstateBytes:    ssBytes,
+		SstateSize:     humanize.Bytes(uint64(ssBytes)),
+	}, nil
+}
+
 // logStartupStats emits a single log line summarizing what's already in the
 // blob stores at startup: file counts, the deduplicated sstate recipe count,
 // and cumulative size per category (exact bytes plus a human-readable form).
 func logStartupStats(log *slog.Logger, inv *blobInventory) error {
-	dlFiles, dlBytes, err := inv.CategoryStats("downloads")
-	if err != nil {
-		return err
-	}
-	ssFiles, ssRecipes, ssBytes, err := inv.SstateStats()
+	s, err := computeCacheStats(inv)
 	if err != nil {
 		return err
 	}
 	log.Info("cache inventory",
-		"downloads_files", dlFiles,
-		"downloads_bytes", dlBytes, "downloads_size", humanize.Bytes(uint64(dlBytes)),
-		"sstate_files", ssFiles,
-		"sstate_recipes", ssRecipes,
-		"sstate_bytes", ssBytes, "sstate_size", humanize.Bytes(uint64(ssBytes)),
+		"downloads_files", s.DownloadsFiles,
+		"downloads_bytes", s.DownloadsBytes, "downloads_size", s.DownloadsSize,
+		"sstate_files", s.SstateFiles,
+		"sstate_recipes", s.SstateRecipes,
+		"sstate_bytes", s.SstateBytes, "sstate_size", s.SstateSize,
 	)
 	return nil
+}
+
+// statsHandler serves the same summary as logStartupStats as JSON, computed
+// fresh per request so it stays current between startups.
+func statsHandler(inv *blobInventory, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s, err := computeCacheStats(inv)
+		if err != nil {
+			log.Error("stats handler failed", "err", err, "remote", r.RemoteAddr)
+			http.Error(w, "stats unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(s); err != nil {
+			log.Error("stats handler: encode failed", "err", err, "remote", r.RemoteAddr)
+		}
+	}
 }

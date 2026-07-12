@@ -23,6 +23,10 @@ WebSocket on port 6768**:
 
 - **Server** — the Go binary under [cmd/yocache/](cmd/yocache/). Endpoints:
   - `GET /healthz`, `GET /version` — liveness + build stamp.
+  - `GET /api/stats` — JSON cache inventory summary (file counts, deduplicated
+    sstate recipe count, cumulative size per category), computed live from the
+    inventory DB. Same data backs the "cache inventory" log line at startup;
+    both are built by [stats.go](cmd/yocache/stats.go).
   - `POST /api/build-report` — decodes-and-logs one JSON telemetry payload per
     bitbake event (no persistence yet; proves the round trip and shows payload
     shape). The Go `buildReport` struct in [main.go](cmd/yocache/main.go)

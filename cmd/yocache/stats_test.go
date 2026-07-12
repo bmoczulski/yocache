@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestSstateChecksum(t *testing.T) {
 	cases := []struct {
@@ -72,5 +78,33 @@ func TestSstateStatsDedupesByChecksum(t *testing.T) {
 	}
 	if size != 3020 {
 		t.Errorf("size = %d, want 3020", size)
+	}
+}
+
+func TestStatsHandler(t *testing.T) {
+	inv, db := newTestInventory(t)
+	insertBlobAt(t, db, "downloads", "a.tar.gz", 100, 1)
+	insertBlobAt(t, db, "sstate",
+		"37/00/sstate:foo::1:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst",
+		10, 2)
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	req := httptest.NewRequest("GET", "/api/stats", nil)
+	rec := httptest.NewRecorder()
+	statsHandler(inv, log)(rec, req)
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var got cacheStats
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	want := cacheStats{
+		DownloadsFiles: 1, DownloadsBytes: 100, DownloadsSize: "100 B",
+		SstateFiles: 1, SstateRecipes: 1, SstateBytes: 10, SstateSize: "10 B",
+	}
+	if got != want {
+		t.Errorf("stats = %+v, want %+v", got, want)
 	}
 }
