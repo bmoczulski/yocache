@@ -9,6 +9,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `GET /api/stats` — JSON cache inventory summary (file counts, deduplicated
   sstate recipe count, cumulative size per category), computed live from the
   inventory DB so it can be polled at will instead of only at startup.
+- `GET /api/build-stats/{buildname}` — per-build cache-benefit summary: bytes
+  uploaded/downloaded and, for sstate, the build time contributed and saved
+  by reusing cache instead of rebuilding. yocache.bbclass now captures each
+  sstate task's wall-clock build time and uploads it alongside the artifact,
+  and prints a one-line "yocache helped you / you helped your teammates"
+  summary at the end of every build.
+- `--build-stats-ttl` (default `720h`, ~1 month) controls how long per-build
+  download stats are retained before an in-process daily garbage collection
+  sweep prunes them.
 
 ## v0.1.2 - 2026-07-12
 
