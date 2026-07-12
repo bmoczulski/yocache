@@ -22,6 +22,9 @@ yocache.local.toml
 # Local working notes
 TODO.md
 
+# One-off local goreleaser validation wrapper (not part of the standard dev flow)
+/goreleaser
+
 # Editor / OS
 .idea/
 .vscode/*

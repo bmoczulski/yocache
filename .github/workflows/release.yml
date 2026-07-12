@@ -1,0 +1,120 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'notes/**'
+      - 'slides.md'
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p .cache/home .cache/go
+      - run: docker build -t yocache-dev .devcontainer
+      - run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD":/workspace -w /workspace yocache-dev \
+            sh -c 'go build ./cmd/... && go vet ./cmd/... && go test -race ./cmd/...'
+
+  bump-version:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+      previous_tag: ${{ steps.bump.outputs.previous_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: bump
+        run: |
+          set -euo pipefail
+
+          unreleased=$(awk '
+            /^## Unreleased$/ { grab=1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$unreleased" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no entries under Unreleased — add one before merging to main."
+            exit 1
+          fi
+
+          base=$(cat VERSION)
+          last=$(git tag -l "v${base}.*" | sort -V | tail -1)
+          if [ -z "$last" ]; then
+            next="v${base}.0"
+          else
+            patch=${last##*.}
+            next="v${base}.$((patch + 1))"
+          fi
+
+          date=$(date -u +%Y-%m-%d)
+          awk -v heading="## ${next} - ${date}" '
+            { print }
+            /^## Unreleased$/ { print ""; print heading }
+          ' CHANGELOG.md > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(release): ${next}"
+          git tag -a "$next" -m "$next"
+          git push origin HEAD:main
+          git push origin "$next"
+
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$last" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: bump-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.tag }}
+          fetch-depth: 0
+      - name: Build release notes
+        run: |
+          tag="${{ needs.bump-version.outputs.tag }}"
+          previous="${{ needs.bump-version.outputs.previous_tag }}"
+          awk -v heading="## ${tag}" '
+            $0 ~ "^"heading { grab=1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ -n "$previous" ]; then
+            {
+              echo ""
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${tag}"
+            } >> release-notes.md
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean --release-notes=release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package meta-yocache layer
+        run: |
+          tag="${{ needs.bump-version.outputs.tag }}"
+          stage=$(mktemp -d)
+          cp -r meta-yocache LICENSE "$stage/"
+          find "$stage" -name '__pycache__' -type d -prune -exec rm -rf {} +
+          ( cd "$stage" && tar czf "yocache-meta-layer_${tag}.tar.gz" meta-yocache LICENSE )
+          ( cd "$stage" && zip -r "yocache-meta-layer_${tag}.zip" meta-yocache LICENSE )
+          mv "$stage/yocache-meta-layer_${tag}.tar.gz" "$stage/yocache-meta-layer_${tag}.zip" .
+      - name: Attach meta-layer archives to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ needs.bump-version.outputs.tag }}"
+          gh release upload "$tag" "yocache-meta-layer_${tag}.tar.gz" "yocache-meta-layer_${tag}.zip"
