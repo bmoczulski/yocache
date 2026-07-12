@@ -87,12 +87,12 @@ jobs:
             $0 ~ "^"heading { grab=1; next }
             grab && /^## / { exit }
             grab { print }
-          ' CHANGELOG.md > release-notes.md
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
           if [ -n "$previous" ]; then
             {
               echo ""
               echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${tag}"
-            } >> release-notes.md
+            } >> "$RUNNER_TEMP/release-notes.md"
           fi
       - uses: actions/setup-go@v5
         with:
@@ -100,7 +100,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean --release-notes=release-notes.md
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Package meta-yocache layer
