@@ -85,6 +85,25 @@ func (b *blobInventory) LRUCandidates(limit int) ([]blobRecord, error) {
 		return nil, fmt.Errorf("inventory lru candidates: %w", err)
 	}
 	defer rows.Close()
+	return scanBlobRecords(rows)
+}
+
+// LRUCandidatesByKind is LRUCandidates restricted to a single store kind — the
+// eviction order for a kind-scoped LRU policy (e.g. lru-sstate), which must
+// never surface or touch blobs of other kinds.
+func (b *blobInventory) LRUCandidatesByKind(kind string, limit int) ([]blobRecord, error) {
+	rows, err := b.db.Query(
+		`SELECT kind, path, size FROM blobs WHERE kind = ? ORDER BY accessed_at ASC LIMIT ?`,
+		kind, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("inventory lru candidates by kind: %w", err)
+	}
+	defer rows.Close()
+	return scanBlobRecords(rows)
+}
+
+func scanBlobRecords(rows *sql.Rows) ([]blobRecord, error) {
 	var out []blobRecord
 	for rows.Next() {
 		var r blobRecord

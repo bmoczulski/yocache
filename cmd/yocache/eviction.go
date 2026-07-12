@@ -52,15 +52,27 @@ func (m *EvictionManager) TryFree(needed int64) (int64, error) {
 // LRUPolicy evicts the least-recently-accessed blobs first. It uses
 // blobInventory as the source of truth for ordering and removes blobs from
 // disk, the quota counter, and the inventory atomically per blob.
+//
+// If kind is set, eviction is scoped to that store kind only (e.g. "sstate")
+// — blobs of other kinds are never considered, evicted, or touched. This
+// backs the "lru-sstate" policy: sstate accumulates stale, no-longer-needed
+// entries as a project evolves and should be trimmed first, while downloads
+// are a flatter, saturating cost that's worth preserving longer.
 type LRUPolicy struct {
 	inventory *blobInventory
 	stores    map[string]string // kind → abs root dir
 	quota     *quotaTracker
 	ledger    *Ledger
 	log       *slog.Logger
+	kind      string // empty = all kinds
 }
 
-func (p *LRUPolicy) Name() string { return "lru" }
+func (p *LRUPolicy) Name() string {
+	if p.kind == "" {
+		return "lru"
+	}
+	return "lru-" + p.kind
+}
 
 // Evict removes the oldest blobs (by accessed_at) until freed >= needed or the
 // store is empty. Blobs in the inventory that no longer exist on disk are
@@ -70,7 +82,13 @@ func (p *LRUPolicy) Evict(needed int64) (int64, error) {
 	const batchSize = 50
 	var freed int64
 	for freed < needed {
-		cands, err := p.inventory.LRUCandidates(batchSize)
+		var cands []blobRecord
+		var err error
+		if p.kind == "" {
+			cands, err = p.inventory.LRUCandidates(batchSize)
+		} else {
+			cands, err = p.inventory.LRUCandidatesByKind(p.kind, batchSize)
+		}
 		if err != nil {
 			return freed, fmt.Errorf("lru evict: %w", err)
 		}
@@ -104,7 +122,7 @@ func (p *LRUPolicy) Evict(needed int64) (int64, error) {
 					"kind", r.Kind, "path", r.Path, "err", err)
 			}
 			p.quota.release(r.Size)
-			p.ledger.RecordArtifactEvicted(r.Kind, r.Path, "lru", "")
+			p.ledger.RecordArtifactEvicted(r.Kind, r.Path, p.Name(), "")
 			freed += r.Size
 		}
 		if len(cands) < batchSize {

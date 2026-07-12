@@ -210,6 +210,69 @@ func TestLRUPolicyEvictStaleInventoryEntry(t *testing.T) {
 	}
 }
 
+func TestLRUPolicyKindScopedName(t *testing.T) {
+	p := &LRUPolicy{kind: "sstate"}
+	if got := p.Name(); got != "lru-sstate" {
+		t.Errorf("Name() = %q, want lru-sstate", got)
+	}
+	all := &LRUPolicy{}
+	if got := all.Name(); got != "lru" {
+		t.Errorf("Name() = %q, want lru", got)
+	}
+}
+
+func TestLRUPolicyEvictKindScoped(t *testing.T) {
+	// sstate is trimmed before downloads: a kind-scoped "lru-sstate"
+	// policy must evict sstate blobs and never touch downloads, even when
+	// downloads are older and would otherwise be evicted first.
+	sstateDir := t.TempDir()
+	downloadsDir := t.TempDir()
+	qt := &quotaTracker{limit: 10000}
+
+	writeTestBlob(t, sstateDir, "s.tgz", make([]byte, 100))
+	writeTestBlob(t, downloadsDir, "d.tar.gz", make([]byte, 500))
+
+	inv, _ := newTestInventory(t)
+	p := &LRUPolicy{
+		inventory: inv,
+		stores:    map[string]string{"sstate": sstateDir},
+		quota:     qt,
+		ledger:    nil,
+		log:       slog.Default(),
+		kind:      "sstate",
+	}
+
+	// downloads entry is oldest (would be first in unscoped LRU order) but
+	// must be excluded entirely.
+	insertBlobAt(t, inv.db, "downloads", "d.tar.gz", 500, 100)
+	insertBlobAt(t, inv.db, "sstate", "s.tgz", 100, 200)
+	qt.used.Store(600)
+
+	freed, err := p.Evict(50)
+	if err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	if freed != 100 {
+		t.Errorf("freed = %d, want 100 (only sstate evicted)", freed)
+	}
+	if qt.Used() != 500 {
+		t.Errorf("quota used = %d, want 500 (downloads untouched)", qt.Used())
+	}
+
+	// sstate blob gone from disk and inventory.
+	if _, err := os.Stat(filepath.Join(sstateDir, "s.tgz")); !os.IsNotExist(err) {
+		t.Error("s.tgz still on disk after eviction")
+	}
+	// downloads blob untouched on disk and still in inventory.
+	if _, err := os.Stat(filepath.Join(downloadsDir, "d.tar.gz")); err != nil {
+		t.Errorf("d.tar.gz unexpectedly gone: %v", err)
+	}
+	cands, _ := inv.LRUCandidates(10)
+	if len(cands) != 1 || cands[0].Path != "d.tar.gz" {
+		t.Errorf("inventory after eviction: %v, want [d.tar.gz]", cands)
+	}
+}
+
 func TestLRUPolicyEvictUnknownKind(t *testing.T) {
 	dir := t.TempDir()
 	qt := &quotaTracker{limit: 10000}

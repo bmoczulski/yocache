@@ -166,6 +166,33 @@ func TestBlobInventoryLRUCandidatesLimit(t *testing.T) {
 	}
 }
 
+func TestBlobInventoryLRUCandidatesByKind(t *testing.T) {
+	inv, db := newTestInventory(t)
+
+	// Interleaved kinds; sstate order by access time should be s-old then s-new,
+	// downloads entries must never appear.
+	insertBlobAt(t, db, "downloads", "d-old.tar.gz", 10, 100)
+	insertBlobAt(t, db, "sstate", "s-old.tgz", 20, 200)
+	insertBlobAt(t, db, "downloads", "d-new.tar.gz", 30, 300)
+	insertBlobAt(t, db, "sstate", "s-new.tgz", 40, 400)
+
+	cands, err := inv.LRUCandidatesByKind("sstate", 10)
+	if err != nil {
+		t.Fatalf("LRUCandidatesByKind: %v", err)
+	}
+	if len(cands) != 2 {
+		t.Fatalf("got %d candidates, want 2", len(cands))
+	}
+	if cands[0].Path != "s-old.tgz" || cands[1].Path != "s-new.tgz" {
+		t.Errorf("LRU order = %v %v, want s-old s-new", cands[0].Path, cands[1].Path)
+	}
+	for _, c := range cands {
+		if c.Kind != "sstate" {
+			t.Errorf("candidate kind = %q, want sstate", c.Kind)
+		}
+	}
+}
+
 func TestBlobInventoryRetrofit(t *testing.T) {
 	inv, db := newTestInventory(t)
 	dir := t.TempDir()

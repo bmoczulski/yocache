@@ -75,7 +75,7 @@ func main() {
 	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
 	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
 	var evictPolicies []string
-	flag.Func("evict", "eviction `policy` to enable (lru); repeat to chain policies in order", func(v string) error {
+	flag.Func("evict", "eviction `policy` to enable (lru, lru-sstate); repeat to chain policies in order", func(v string) error {
 		evictPolicies = append(evictPolicies, v)
 		return nil
 	})
@@ -174,6 +174,15 @@ func main() {
 				quota:     qt,
 				ledger:    ledger,
 				log:       log,
+			})
+		case "lru-sstate":
+			policies = append(policies, &LRUPolicy{
+				inventory: inv,
+				stores:    map[string]string{"sstate": *sstateDir},
+				quota:     qt,
+				ledger:    ledger,
+				log:       log,
+				kind:      "sstate",
 			})
 		default:
 			log.Error("unknown eviction policy", "policy", name)
