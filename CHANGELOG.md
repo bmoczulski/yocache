@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.2 - 2026-07-12
+
 ### Fixed
 - Release workflow now actually publishes the curated `CHANGELOG.md` section
   as GitHub Release notes. `changelog.disable: true` in `.goreleaser.yaml` was
