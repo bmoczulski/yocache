@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.1 - 2026-07-12
+
 ### Fixed
 - Release workflow no longer fails GoReleaser's git-dirty-state check by
   writing the generated release notes outside the checked-out repo.
