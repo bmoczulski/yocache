@@ -1,0 +1,16 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p .cache/home .cache/go
+      - run: docker build -t yocache-dev .devcontainer
+      - run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD":/workspace -w /workspace yocache-dev \
+            sh -c 'go build ./cmd/... && go vet ./cmd/... && go test -race ./cmd/...'
