@@ -208,6 +208,10 @@ func main() {
 	downloads.eviction = evMgr
 	sstate.eviction = evMgr
 
+	if err := logStartupStats(log, inv); err != nil {
+		log.Error("startup stats failed", "err", err)
+	}
+
 	ver := buildVersionInfo()
 	log.Info("yocache version", "version", ver.Version, "revision", ver.Revision, "modified", ver.Modified)
 
