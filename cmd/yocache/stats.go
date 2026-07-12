@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -64,6 +65,173 @@ func sstateChecksum(path string) string {
 		base = base[:i]
 	}
 	return base
+}
+
+// BuildUploadStats returns one build's own upload footprint: how many
+// artifacts it contributed (deduplicating sstate's pkg+.siginfo(+.sig)
+// sidecars by content hash, the same way SstateStats does for the global
+// count), their cumulative size, and — sstate only — the total build time
+// invested in milliseconds (each distinct hash's build_ms counted once, not
+// once per sidecar file). Milliseconds, not seconds: summed here before any
+// rounding, so fast (sub-second) tasks don't get truncated to 0 and vanish
+// from the aggregate — computeBuildStats converts to whole seconds once, at
+// the very end, for display.
+func (b *blobInventory) BuildUploadStats(buildname string) (dlFiles, dlBytes, ssFiles, ssRecipes, ssBytes, ssMS int64, err error) {
+	dlFiles, dlBytes, err = b.buildUploadCategoryStats(buildname, "downloads")
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, err
+	}
+
+	rows, err := b.db.Query(
+		`SELECT path, size, build_ms FROM blobs WHERE kind = 'sstate' AND buildname = ?`, buildname,
+	)
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s: %w", buildname, err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var path string
+		var size int64
+		var ms sql.NullInt64
+		if err := rows.Scan(&path, &size, &ms); err != nil {
+			return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s scan: %w", buildname, err)
+		}
+		ssFiles++
+		ssBytes += size
+		if csum := sstateChecksum(path); csum != "" {
+			if _, dup := seen[csum]; !dup {
+				seen[csum] = struct{}{}
+				if ms.Valid {
+					ssMS += ms.Int64
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s: %w", buildname, err)
+	}
+	return dlFiles, dlBytes, ssFiles, int64(len(seen)), ssBytes, ssMS, nil
+}
+
+func (b *blobInventory) buildUploadCategoryStats(buildname, kind string) (files, sizeBytes int64, err error) {
+	err = b.db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(size), 0) FROM blobs WHERE kind = ? AND buildname = ?`, kind, buildname,
+	).Scan(&files, &sizeBytes)
+	if err != nil {
+		return 0, 0, fmt.Errorf("inventory build upload category stats %s/%s: %w", kind, buildname, err)
+	}
+	return files, sizeBytes, nil
+}
+
+// BuildDownloadStats returns one build's own download footprint, already
+// deduplicated at write time by RecordBuildDownload's primary key. ssMS is
+// milliseconds, summed before rounding — see BuildUploadStats.
+func (b *blobInventory) BuildDownloadStats(buildname string) (dlFiles, dlBytes, ssFiles, ssBytes, ssMS int64, err error) {
+	rows, err := b.db.Query(
+		`SELECT kind, COUNT(*), COALESCE(SUM(bytes), 0), COALESCE(SUM(ms), 0)
+		 FROM build_downloads WHERE buildname = ? GROUP BY kind`, buildname,
+	)
+	if err != nil {
+		return 0, 0, 0, 0, 0, fmt.Errorf("inventory build download stats %s: %w", buildname, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var kind string
+		var count, bytes, ms int64
+		if err := rows.Scan(&kind, &count, &bytes, &ms); err != nil {
+			return 0, 0, 0, 0, 0, fmt.Errorf("inventory build download stats %s scan: %w", buildname, err)
+		}
+		switch kind {
+		case "downloads":
+			dlFiles, dlBytes = count, bytes
+		case "sstate":
+			ssFiles, ssBytes, ssMS = count, bytes, ms
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, fmt.Errorf("inventory build download stats %s: %w", buildname, err)
+	}
+	return dlFiles, dlBytes, ssFiles, ssBytes, ssMS, nil
+}
+
+// buildDirectionStats is one direction (uploads or downloads) split by
+// category, mirroring cacheStats' downloads/sstate split.
+type buildDirectionStats struct {
+	Downloads directionCount `json:"downloads"`
+	Sstate    directionCount `json:"sstate"`
+}
+
+// directionCount is one category's count/bytes/seconds within a build's
+// upload or download footprint. Seconds is omitted for the downloads
+// category, which has no build-time concept.
+type directionCount struct {
+	Count   int64 `json:"count"`
+	Bytes   int64 `json:"bytes"`
+	Seconds int64 `json:"seconds,omitempty"`
+}
+
+// buildStats is the JSON shape of GET /api/build-stats/{buildname}.
+type buildStats struct {
+	BuildName string              `json:"build_name"`
+	Uploads   buildDirectionStats `json:"uploads"`
+	Downloads buildDirectionStats `json:"downloads"`
+}
+
+// computeBuildStats queries the inventory DB live for one build's upload and
+// download footprint.
+func computeBuildStats(inv *blobInventory, buildname string) (buildStats, error) {
+	upDlFiles, upDlBytes, _, upSsRecipes, upSsBytes, upSsMS, err := inv.BuildUploadStats(buildname)
+	if err != nil {
+		return buildStats{}, err
+	}
+	dnDlFiles, dnDlBytes, dnSsFiles, dnSsBytes, dnSsMS, err := inv.BuildDownloadStats(buildname)
+	if err != nil {
+		return buildStats{}, err
+	}
+	return buildStats{
+		BuildName: buildname,
+		Uploads: buildDirectionStats{
+			Downloads: directionCount{Count: upDlFiles, Bytes: upDlBytes},
+			Sstate:    directionCount{Count: upSsRecipes, Bytes: upSsBytes, Seconds: roundMSToSeconds(upSsMS)},
+		},
+		Downloads: buildDirectionStats{
+			Downloads: directionCount{Count: dnDlFiles, Bytes: dnDlBytes},
+			Sstate:    directionCount{Count: dnSsFiles, Bytes: dnSsBytes, Seconds: roundMSToSeconds(dnSsMS)},
+		},
+	}, nil
+}
+
+// roundMSToSeconds converts milliseconds to the nearest whole second. Applied
+// once, after all per-task millisecond values have already been summed —
+// rounding any earlier would let fast (sub-second) tasks vanish from the
+// aggregate instead of just from their own individual display.
+func roundMSToSeconds(ms int64) int64 {
+	return (ms + 500) / 1000
+}
+
+// buildStatsHandler serves GET /api/build-stats/{buildname}: one build's own
+// upload and download footprint, computed fresh per request.
+func buildStatsHandler(inv *blobInventory, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		buildname := r.PathValue("buildname")
+		if buildname == "" {
+			http.Error(w, "buildname required", http.StatusBadRequest)
+			return
+		}
+		s, err := computeBuildStats(inv, buildname)
+		if err != nil {
+			log.Error("build stats handler failed", "err", err, "build_name", buildname, "remote", r.RemoteAddr)
+			http.Error(w, "stats unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(s); err != nil {
+			log.Error("build stats handler: encode failed", "err", err, "remote", r.RemoteAddr)
+		}
+	}
 }
 
 // cacheStats is the file-count/size summary shared by the startup log line

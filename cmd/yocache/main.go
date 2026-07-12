@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,7 @@ func main() {
 	quotaStr := flag.String("quota", "0", "total storage quota for all blob stores (e.g. 500MiB, 10GB); 0 means unlimited")
 	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
 	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
+	buildStatsTTL := flag.Duration("build-stats-ttl", 30*24*time.Hour, "how long to retain per-build download stats before garbage collection (Go duration syntax, e.g. 720h)")
 	var evictPolicies []string
 	flag.Func("evict", "eviction `policy` to enable (lru, lru-sstate); repeat to chain policies in order", func(v string) error {
 		evictPolicies = append(evictPolicies, v)
@@ -99,6 +101,11 @@ func main() {
 	if len(blockList) > 0 {
 		log.Info("recipe block list active", "recipes", blockListRecipes)
 	}
+
+	// Created early so background goroutines (the build-stats GC ticker) and
+	// the HTTP server's own shutdown handling below can share one lifecycle.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Operational state lives in a single SQLite file shared by all stores.
 	// Make the parent dir so the default "var/" path works out of the box.
@@ -212,6 +219,40 @@ func main() {
 		log.Error("startup stats failed", "err", err)
 	}
 
+	// build_downloads accumulates one row per (buildname, kind, artifact) ever
+	// fetched and is never rewritten in place, so it needs its own retention
+	// sweep — blobs on disk already have their own lifecycle via --evict.
+	// Runs once now, then daily for as long as the server runs. Tied to the
+	// same ctx as the HTTP server's shutdown signal, and bgTasks.Wait() below
+	// blocks until it has actually exited — no goroutine left running past
+	// main() returning.
+	var bgTasks sync.WaitGroup
+	gcBuildStats := func() {
+		n, err := inv.GCBuildDownloads(*buildStatsTTL)
+		if err != nil {
+			log.Warn("build-stats gc failed", "err", err)
+			return
+		}
+		if n > 0 {
+			log.Info("build-stats gc", "deleted_rows", n, "ttl", *buildStatsTTL)
+		}
+	}
+	gcBuildStats()
+	bgTasks.Add(1)
+	go func() {
+		defer bgTasks.Done()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				gcBuildStats()
+			}
+		}
+	}()
+
 	ver := buildVersionInfo()
 	log.Info("yocache version", "version", ver.Version, "revision", ver.Revision, "modified", ver.Modified)
 
@@ -222,6 +263,7 @@ func main() {
 	})
 	mux.HandleFunc("GET /version", versionHandler(ver))
 	mux.HandleFunc("GET /api/stats", statsHandler(inv, log))
+	mux.HandleFunc("GET /api/build-stats/{buildname}", buildStatsHandler(inv, log))
 
 	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
 	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
@@ -362,9 +404,6 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	select {
 	case err := <-errCh:
 		log.Error("server failed", "err", err)
@@ -379,5 +418,6 @@ func main() {
 		log.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
 	}
+	bgTasks.Wait()
 	log.Info("shutdown complete")
 }

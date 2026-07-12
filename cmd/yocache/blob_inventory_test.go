@@ -52,7 +52,7 @@ func queryBlobRow(t *testing.T, db *sql.DB, kind, path string) (size, addedAt, a
 func TestBlobInventoryUpsertNew(t *testing.T) {
 	inv, db := newTestInventory(t)
 
-	if err := inv.Upsert("downloads", "foo.tar.gz", 1234); err != nil {
+	if err := inv.Upsert("downloads", "foo.tar.gz", 1234, "", -1); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestBlobInventoryUpsertReplace(t *testing.T) {
 	insertBlobAt(t, db, "sstate", "task.tgz", 100, 1000)
 
 	// Upsert with a new size — simulates a VCS tarball that grew.
-	if err := inv.Upsert("sstate", "task.tgz", 200); err != nil {
+	if err := inv.Upsert("sstate", "task.tgz", 200, "", -1); err != nil {
 		t.Fatalf("Upsert replace: %v", err)
 	}
 

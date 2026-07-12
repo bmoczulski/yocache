@@ -347,6 +347,22 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	distro := r.Header.Get("X-BitBake-var-DISTRO")
 	buildName := r.Header.Get("X-BitBake-var-BUILDNAME")
 
+	// Wall-clock milliseconds the task that produced this artifact took to
+	// run, stashed by yocache.bbclass at TaskStarted and read back in the
+	// SSTATEPOSTCREATEFUNCS upload hook. Only ever sent for sstate; -1 means
+	// "not provided" so Upsert stores NULL rather than a false zero.
+	// Milliseconds, not whole seconds: a fast (sub-second) task would
+	// otherwise always report 0.
+	buildMS := int64(-1)
+	if ms := r.Header.Get("X-BitBake-var-YOCACHE_BUILD_MS"); ms != "" {
+		if v, err := strconv.ParseInt(ms, 10, 64); err == nil {
+			buildMS = v
+		} else {
+			u.log.Warn("upload: invalid YOCACHE_BUILD_MS header",
+				"kind", u.kind, "name", name, "value", ms, "err", err, "remote", r.RemoteAddr)
+		}
+	}
+
 	logAttrs := []any{"kind", u.kind, "name", name, "bytes", n, "remote", r.RemoteAddr}
 	if machine != "" {
 		logAttrs = append(logAttrs, "machine", machine)
@@ -354,10 +370,13 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	if distro != "" {
 		logAttrs = append(logAttrs, "distro", distro)
 	}
+	if buildMS >= 0 {
+		logAttrs = append(logAttrs, "build_ms", buildMS)
+	}
 	u.log.Info("cache upload stored", logAttrs...)
 	u.ledger.RecordArtifactAdded(u.kind, name, n, "", machine, distro, buildName)
 	if u.inventory != nil {
-		if err := u.inventory.Upsert(u.kind, name, n); err != nil {
+		if err := u.inventory.Upsert(u.kind, name, n, buildName, buildMS); err != nil {
 			u.log.Warn("upload: inventory upsert failed", "kind", u.kind, "name", name, "err", err)
 		}
 	}
@@ -398,6 +417,22 @@ func (u *blobUploader) serveBlob(w http.ResponseWriter, r *http.Request, name, m
 	if u.inventory != nil {
 		if err := u.inventory.Touch(u.kind, name); err != nil {
 			u.log.Warn("cache hit: inventory touch failed", "kind", u.kind, "name", name, "err", err)
+		}
+		// Attribute this fetch to the requesting build. Only possible when the
+		// request carried a buildname (identity-prefixed URL); a direct
+		// /sstate/ or /downloads/ GET has nothing to attribute to.
+		if buildName != "" {
+			artifactKey := name
+			if u.kind == "sstate" {
+				artifactKey = sstateChecksum(name)
+			}
+			ms, _, err := u.inventory.BuildMS(u.kind, name)
+			if err != nil {
+				u.log.Warn("cache hit: build ms lookup failed", "kind", u.kind, "name", name, "err", err)
+			}
+			if err := u.inventory.RecordBuildDownload(buildName, u.kind, artifactKey, fi.Size(), ms); err != nil {
+				u.log.Warn("cache hit: record build download failed", "kind", u.kind, "name", name, "err", err)
+			}
 		}
 	}
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
