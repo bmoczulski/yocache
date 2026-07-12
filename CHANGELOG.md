@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.0 - 2026-07-12
+
 ### Added
 - Single-node blob cache for Yocto sstate and DL-mirror artifacts, with
   crash-safe staged uploads and atomic rename into place.
