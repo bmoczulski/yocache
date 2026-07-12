@@ -82,7 +82,16 @@ _BUILD_META_VARS = ("BUILDNAME", "MACHINE", "DISTRO", "DISTRO_VERSION", "TARGET_
 # Per-blob recipe context forwarded by the worker hooks as X-BitBake-var-*
 # headers. Lets the server group and prune blobs by recipe, version, and
 # architecture without re-parsing the artifact filename.
-_RECIPE_META_VARS = ("PN", "PV", "PR", "BPN", "SSTATE_PKGARCH")
+#
+# YOCACHE_BUILD_MS is not a real bitbake variable: yocache.bbclass's
+# yocache_notify_sstate sets it (from a task-start timestamp stashed on
+# bb.build.TaskStarted) right before this dict is built, so it rides out here
+# the same way PN/PV/etc. do. It's unset for do_fetch's own task (each task
+# runs in its own forked worker with a fresh datastore), so downloads uploads
+# never send it — d.getVar returns None/empty and the loop below drops it.
+# Milliseconds, not whole seconds: a fast (sub-second) task would otherwise
+# always report 0, and the server sums this before rounding for display.
+_RECIPE_META_VARS = ("PN", "PV", "PR", "BPN", "SSTATE_PKGARCH", "YOCACHE_BUILD_MS")
 
 # Cooker-side singleton + the lock guarding its lifecycle transitions.
 _uploader = None

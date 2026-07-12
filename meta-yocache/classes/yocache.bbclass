@@ -253,6 +253,46 @@ python yocache_eventhandler () {
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
 
+    def yocache_print_build_stats():
+        # One-line "yocache helped you" / "you helped your teammates" summary,
+        # printed once at BuildCompleted next to bitbake's own built-in
+        # "Sstate summary: Wanted ... Mirrors ..." line. Fetched from
+        # GET /api/build-stats/<BUILDNAME> only after uploader.stop(d) above
+        # has drained, so this build's own final uploads are already
+        # reflected in the server's numbers. Best-effort like everything else
+        # here: a fetch/parse failure is a bb.note, never a build problem.
+        buildname = d.getVar("BUILDNAME")
+        base_url = d.getVar("YOCACHE_URL")
+        if not (buildname and base_url):
+            bb.note("yocache: build stats summary skipped (BUILDNAME=%r YOCACHE_URL=%r)"
+                    % (buildname, base_url))
+            return
+        endpoint = "%s/api/build-stats/%s" % (base_url, urllib.parse.quote(buildname, safe=""))
+        try:
+            with urllib.request.urlopen(endpoint, timeout=5) as resp:
+                stats = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            bb.note("yocache: could not fetch build stats: %s" % exc)
+            return
+
+        def _hms(seconds):
+            h, rem = divmod(int(seconds or 0), 3600)
+            m, s = divmod(rem, 60)
+            return "%02d:%02d:%02d" % (h, m, s)
+
+        up_ss = stats.get("uploads", {}).get("sstate", {})
+        up_dl = stats.get("uploads", {}).get("downloads", {})
+        dn_ss = stats.get("downloads", {}).get("sstate", {})
+        dn_dl = stats.get("downloads", {}).get("downloads", {})
+        bb.plain(
+            "yocache summary: reused %d sstate + %d download object(s), "
+            "saving ~%s of rebuild time | contributed %d sstate + %d "
+            "download object(s), worth ~%s to your teammates" % (
+                dn_ss.get("count", 0), dn_dl.get("count", 0), _hms(dn_ss.get("seconds", 0)),
+                up_ss.get("count", 0), up_dl.get("count", 0), _hms(up_ss.get("seconds", 0)),
+            )
+        )
+
     # One-time setup gate: complain LOUDLY (but never abort) if "toaster" is
     # missing from the global INHERIT. MissedSstate — yocache's richest sstate
     # hit/miss signal — is fired by sstate.bbclass only when "toaster" is in
@@ -296,6 +336,10 @@ python yocache_eventhandler () {
             uploader.stop(d)
         except Exception as exc:
             bb.warn("yocache: could not stop uploader: %s" % exc)
+        try:
+            yocache_print_build_stats()
+        except Exception as exc:
+            bb.warn("yocache: could not print build stats summary: %s" % exc)
 
     # Drop the Toaster-only MetadataEvent subtypes up front (before any
     # serialization or I/O) — eventmask let every MetadataEvent through because
@@ -546,12 +590,26 @@ yocache_eventhandler[eventmask] = "${YOCACHE_EVENTS}"
 # blocking on the network, no thread (a worker os._exit()s and would kill it).
 # All failures are caught — an upload must never break a build.
 
+# Wall-clock task timing, so an uploaded sstate artifact can carry "this took
+# N seconds to build" to the server. Mirrors buildstats.bbclass's own trick
+# (classes-global/buildstats.bbclass): stash the start time in the datastore
+# on TaskStarted, read it back at the end of the same task. Both fire in the
+# same forked worker process for that one task, so a plain d.setVar/d.getVar
+# round trip is enough — no IPC, no opt-in buildstats class required. Kept as
+# its own minimal addhandler, separate from yocache_eventhandler above: this
+# is local bookkeeping only (no POST, no YOCACHE_LOG entry).
+python yocache_task_started () {
+    d.setVar("__yocache_task_started", e.time)
+}
+addhandler yocache_task_started
+yocache_task_started[eventmask] = "bb.build.TaskStarted"
+
 # After an sstate archive is created and signed, hand it (and its sidecars) to
 # the uploader. SSTATE_PKG is the finished blob; runs in SSTATE_BUILDDIR (see
 # sstate.bbclass). A fully usable mirror needs the sidecars too: bitbake HEADs
 # <pkg>.siginfo on every restore, and <pkg>.sig when sstate is signed.
 python yocache_notify_sstate () {
-    import os, sys
+    import os, sys, time
     _yclib = d.getVar('YOCACHE_LAYER_LIBDIR')
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
@@ -565,6 +623,19 @@ python yocache_notify_sstate () {
         if not (path and os.path.exists(path)):
             bb.warn("yocache: sstate upload missing path: %s" % path)
             return
+
+        # Wall-clock time this task took to run, if yocache_task_started caught
+        # its start above. Stashed as a plain datastore var so it flows out
+        # through recipe_meta below, exactly like PN/PV/etc., and reaches the
+        # server as the X-BitBake-var-YOCACHE_BUILD_MS PUT header.
+        # Milliseconds, not whole seconds: most sstate-producing tasks (e.g.
+        # admin/packaging steps, *-native quick builds) finish in well under a
+        # second, and int()-truncating to whole seconds would report 0 for
+        # every one of them.
+        _started = d.getVar("__yocache_task_started", False)
+        if _started is not None:
+            d.setVar("YOCACHE_BUILD_MS", str(int(round((time.time() - _started) * 1000))))
+
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
         sstate_dir = d.getVar("SSTATE_DIR")
         recipe_meta = {var: d.getVar(var) for var in uploader._RECIPE_META_VARS}
