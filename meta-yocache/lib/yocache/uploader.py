@@ -22,15 +22,14 @@ Roles by process:
   - worker: notify(sock_path, kind, path, name) — stateless socket client.
 """
 
+import http.client
 import json
 import os
 import queue
 import socket
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 # Best-effort logging: `bb` exists inside bitbake; fall back to stderr so the
 # module is importable (and unit-smokable) standalone.
@@ -89,6 +88,74 @@ _uploader = None
 _lock = threading.Lock()
 
 
+# -- minimal hand-rolled HTTP/1.1 response parsing (see notes/, below) -----
+#
+# _upload() sends "Expect: 100-continue" and needs to decide, before ever
+# writing the request body, whether the server wants it or is rejecting the
+# upload outright (already has this blob, conflict, quota). http.client's own
+# getresponse()/begin() can't answer that: it transparently loops past a
+# leading "100 Continue" status line looking for a final one, which would
+# deadlock here (the server won't finalize until it has the body, and the
+# body won't be sent until told to). So the first response is parsed by hand,
+# via an unbuffered raw reader (buffering=0 — a buffered one could pull bytes
+# belonging to a later parse and lose them once discarded). This works
+# identically for a plain socket and an ssl.SSLSocket (used for https://
+# YOCACHE_URL, e.g. behind a TLS-terminating facade): SSLSocket overrides
+# recv_into(), what makefile() relies on, to decrypt through the TLS layer,
+# with no flags argument involved — unlike SSLSocket.recv(), which rejects
+# MSG_PEEK, ruling out a peek-based shortcut for https://.
+
+def _read_line(raw):
+    line = raw.readline(8192)
+    if not line:
+        raise ConnectionError("connection closed while reading response")
+    return line.rstrip(b"\r\n")
+
+
+def _read_status_and_headers(raw):
+    status_line = _read_line(raw)
+    status = int(status_line.split(b" ", 2)[1])
+    headers = {}
+    while True:
+        line = _read_line(raw)
+        if not line:
+            break
+        name, _, value = line.partition(b":")
+        headers[name.strip().lower().decode("ascii", "replace")] = (
+            value.strip().decode("iso-8859-1", "replace"))
+    return status, headers
+
+
+def _read_chunked_body(raw):
+    body = bytearray()
+    while True:
+        size_line = _read_line(raw)
+        size = int(size_line.split(b";", 1)[0], 16)  # ignore chunk-ext
+        if size == 0:
+            while _read_line(raw):  # consume trailer headers, if any
+                pass
+            break
+        body += raw.read(size)
+        _read_line(raw)  # consume the chunk's trailing CRLF
+    return bytes(body)
+
+
+def _read_response_body(raw, headers):
+    """Read whatever body accompanies an already-parsed status+header
+    block, honoring all three HTTP/1.1 framing modes (RFC 9112 S6.3):
+    chunked, Content-Length, or (absent both) read until connection close.
+    The close-delimited fallback is safe here because this connection is
+    discarded right after, in every branch -- never reused. Deliberately
+    server-agnostic: no assumption about what yocache's current responses
+    happen to look like, since that may change."""
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        return _read_chunked_body(raw)
+    length = headers.get("content-length")
+    if length is not None:
+        return raw.read(int(length))
+    return raw.read()  # neither header: body ends at connection close
+
+
 class Uploader:
     """Cooker-resident: accepts notifies on a unix socket, PUTs files to yocache.
 
@@ -101,6 +168,10 @@ class Uploader:
     def __init__(self, sock_path, base_url, threads, skip, build_meta=None, skip_types=None):
         self.sock_path = sock_path
         self.base_url = base_url.rstrip("/")
+        parsed = urllib.parse.urlsplit(self.base_url)
+        self._scheme = parsed.scheme
+        self._host = parsed.hostname
+        self._port = parsed.port or (443 if self._scheme == "https" else 80)
         self.threads = max(1, int(threads))
         self.skip = skip
         self.skip_types = frozenset(skip_types or ())
@@ -247,7 +318,8 @@ class Uploader:
                 self._queue.task_done()
 
     def _upload(self, kind, path, name, checksums, recipe_meta=None):
-        url = "%s/%s/%s" % (self.base_url, kind, urllib.parse.quote(name))
+        quoted_name = urllib.parse.quote(name)
+        url = "%s/%s/%s" % (self.base_url, kind, quoted_name)
         if self.skip:
             _note("dry-run, would PUT %s (%s)" % (url, path))
             return
@@ -259,54 +331,88 @@ class Uploader:
         except OSError as exc:
             _warn("cannot stat %s: %s" % (path, exc))
             return
+
+        req_path = "/%s/%s" % (kind, quoted_name)
+        hdrs = {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(size),
+            # Only write if the server doesn't already hold this resource.
+            # For sstate the URL encodes the unihash, so URL existence
+            # implies identical content; for DL the filename is stable
+            # enough that the same guard applies. Server responds 412
+            # Precondition Failed when the resource exists (RFC 7232 §6);
+            # we treat that as a successful no-op, not an error.
+            "If-None-Match": "*",
+            # Two-phase upload: let the server reject (already has it,
+            # conflict, quota) from headers alone, before we ever stream a
+            # potentially large blob it doesn't want. See
+            # _read_status_and_headers above and cmd/yocache/upload.go's
+            # expectsContinue()/drain guard, written to pair with this.
+            "Expect": "100-continue",
+        }
+        # Attach any already-verified checksums from bitbake so the server
+        # can validate what it receives without re-hashing. We trust
+        # bitbake's verification; we never compute these ourselves here.
+        # Missing keys mean the server computes its own hash and marks it
+        # "locally computed" for audit.
+        for algo, value in (checksums or {}).items():
+            hdr = _CHECKSUM_HEADERS.get(algo)
+            if hdr and value:
+                hdrs[hdr] = value
+        for var, value in self.build_meta.items():
+            if value:
+                hdrs["X-BitBake-var-" + var] = value
+        for var, value in (recipe_meta or {}).items():
+            if value:
+                hdrs["X-BitBake-var-" + var] = value
+
+        conn_cls = (http.client.HTTPSConnection if self._scheme == "https"
+                    else http.client.HTTPConnection)
+        conn = conn_cls(self._host, self._port, timeout=300)
         try:
             with open(path, "rb") as fh:
-                hdrs = {
-                    "Content-Type": "application/octet-stream",
-                    "Content-Length": str(size),
-                    # Only write if the server doesn't already hold this
-                    # resource. For sstate the URL encodes the unihash, so
-                    # URL existence implies identical content; for DL the
-                    # filename is stable enough that the same guard applies.
-                    # Server responds 412 Precondition Failed when the
-                    # resource exists (RFC 7232 §6); we treat that as a
-                    # successful no-op, not an error.
-                    "If-None-Match": "*",
-                }
-                # Attach any already-verified checksums from bitbake so the
-                # server can validate what it receives without re-hashing.
-                # We trust bitbake's verification; we never compute these
-                # ourselves here.  Missing keys mean the server computes
-                # its own hash and marks it "locally computed" for audit.
-                for algo, value in (checksums or {}).items():
-                    hdr = _CHECKSUM_HEADERS.get(algo)
-                    if hdr and value:
-                        hdrs[hdr] = value
-                for var, value in self.build_meta.items():
-                    if value:
-                        hdrs["X-BitBake-var-" + var] = value
-                for var, value in (recipe_meta or {}).items():
-                    if value:
-                        hdrs["X-BitBake-var-" + var] = value
-                req = urllib.request.Request(
-                    url, data=fh, method="PUT",
-                    headers=hdrs)
-                with urllib.request.urlopen(req, timeout=300) as resp:
-                    resp.read()
-            _note("PUT %s (%d bytes)" % (url, size))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 412:
-                _note("skipped %s (server already has it)" % url)
-            elif exc.code == 409:
-                existing = exc.headers.get("X-Yocache-Existing-Size")
-                _note("PUT %s failed (%s): local=%d bytes, existing=%s bytes" %
-                      (url, exc, size, existing))
-            else:
-                # 501 from the current server stub lands here too — expected
-                # until storage is implemented; keep it quiet (note, not warn).
-                _note("PUT %s failed (%s)" % (url, exc))
+                conn.connect()
+                conn.putrequest("PUT", req_path)
+                for k, v in hdrs.items():
+                    conn.putheader(k, v)
+                conn.endheaders()  # headers only — body not sent yet
+
+                raw = conn.sock.makefile("rb", buffering=0)
+                status, headers = _read_status_and_headers(raw)
+
+                if status == 100:
+                    while True:
+                        chunk = fh.read(65536)
+                        if not chunk:
+                            break
+                        conn.send(chunk)
+                    resp = conn.getresponse()
+                    body = resp.read()
+                    status = resp.status
+                    headers = {k.lower(): v for k, v in resp.getheaders()}
+                else:
+                    body = _read_response_body(raw, headers)
+
+            self._handle_final(status, headers, url, size, body)
         except Exception as exc:
             _note("PUT %s failed (%s)" % (url, exc))
+        finally:
+            conn.close()
+
+    def _handle_final(self, status, headers, url, size, body):
+        if status == 201:
+            _note("PUT %s (%d bytes)" % (url, size))
+        elif status == 412:
+            _note("skipped %s (server already has it)" % url)
+        elif status == 409:
+            existing = headers.get("x-yocache-existing-size")
+            _note("PUT %s failed (409 conflict): local=%d bytes, existing=%s bytes" %
+                  (url, size, existing))
+        else:
+            # 501 from the current server stub lands here too — expected
+            # until storage is implemented; keep it quiet (note, not warn).
+            text = body[:200].decode("utf-8", "replace") if body else ""
+            _note("PUT %s failed (%s): %s" % (url, status, text))
 
 
 # -- module-level API (cooker) --------------------------------------------
