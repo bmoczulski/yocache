@@ -187,6 +187,25 @@ scripts/summarize-events.sh [path/to/yocache-events.jsonl]   # counts per event 
 tarball shapes, build identity, sstate upload hook) backing the design — consult
 them before guessing at bitbake behaviour.
 
+## Release automation
+
+Every push to `main` that changes shippable content (i.e. not docs/notes-only)
+is auto-released: [.github/workflows/release.yml](.github/workflows/release.yml)
+runs the same test suite as `build.sh`, then cuts `CHANGELOG.md`'s `Unreleased`
+section into a new version, tags it, and publishes a GitHub Release — binaries
+for linux/darwin × amd64/arm64 via [.goreleaser.yaml](.goreleaser.yaml) (no cgo
+needed, `modernc.org/sqlite` is pure Go), plus a tarball/zip of
+[meta-yocache/](meta-yocache/). [VERSION](VERSION) holds `MAJOR.MINOR`; only the
+patch auto-increments — bump `MAJOR`/`MINOR` yourself by editing that file.
+[.github/workflows/ci.yml](.github/workflows/ci.yml) covers PRs/branches with no
+release side effects. The release job fails outright if `CHANGELOG.md` has no
+`Unreleased` entries, so see the convention below.
+
+To validate `.goreleaser.yaml` or dry-run a build locally without waiting on
+CI, use the gitignored `./goreleaser` wrapper (runs the official
+`goreleaser/goreleaser` Docker image — not a repo script, recreate it if
+missing: `./goreleaser check` or `./goreleaser release --snapshot --clean`).
+
 ## Conventions
 
 - **Telemetry must never break a build.** In the bbclass, every network/parse
@@ -198,3 +217,7 @@ them before guessing at bitbake behaviour.
   is enabled on large builds — don't treat the current shape as the target.
 - Commits: Conventional Commits, no emojis, no `Co-authored-by`; keep them small
   and surgical (see the global instructions).
+- **Every user-facing change needs a `CHANGELOG.md` entry** under `##
+  Unreleased`, in the same commit/PR as the change — this is what the release
+  workflow turns into GitHub Release notes (see "Release automation" above). A
+  push to `main` with no new entry fails the release job outright.
