@@ -1,0 +1,24 @@
+version: 2
+project_name: yocache
+
+builds:
+  - id: yocache
+    main: ./cmd/yocache
+    binary: yocache
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+
+archives:
+  - id: yocache
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
