@@ -162,8 +162,17 @@ func main() {
 		log.Info("storage quota disabled (unlimited)")
 	}
 
-	// Build the eviction manager from --evict flags.
+	// Seed the inventory with blobs already on disk that have no DB record yet
+	// (pre-existing before this tracking existed, or added out-of-band) so both
+	// eviction ordering and the startup stats summary below reflect reality.
 	stores := map[string]string{"downloads": *downloadsDir, "sstate": *sstateDir}
+	if err := inv.Retrofit(stores); err != nil {
+		log.Error("inventory retrofit failed", "err", err)
+		os.Exit(1)
+	}
+	log.Info("inventory retrofit complete")
+
+	// Build the eviction manager from --evict flags.
 	var policies []EvictionPolicy
 	for _, name := range evictPolicies {
 		switch name {
@@ -193,14 +202,6 @@ func main() {
 	if len(policies) > 0 {
 		evMgr = &EvictionManager{policies: policies, log: log}
 		log.Info("eviction enabled", "policies", evictPolicies)
-
-		// Seed the inventory with blobs already on disk so the eviction order
-		// reflects reality from the first upload, not just post-restart arrivals.
-		if err := inv.Retrofit(stores); err != nil {
-			log.Error("inventory retrofit failed", "err", err)
-			os.Exit(1)
-		}
-		log.Info("inventory retrofit complete")
 	}
 
 	// Wire the eviction manager into the uploaders now that it's built.
