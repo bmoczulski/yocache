@@ -280,18 +280,41 @@ python yocache_eventhandler () {
             m, s = divmod(rem, 60)
             return "%02d:%02d:%02d" % (h, m, s)
 
+        def _object_bits(ss, dl):
+            # Only mention a category if it actually has something to report,
+            # so a build that only touched sstate (or only downloads) doesn't
+            # get a misleading "0 download object(s)" tacked on.
+            bits = []
+            if ss.get("count", 0):
+                bits.append("%d sstate" % ss["count"])
+            if dl.get("count", 0):
+                bits.append("%d download" % dl["count"])
+            return bits
+
         up_ss = stats.get("uploads", {}).get("sstate", {})
         up_dl = stats.get("uploads", {}).get("downloads", {})
         dn_ss = stats.get("downloads", {}).get("sstate", {})
         dn_dl = stats.get("downloads", {}).get("downloads", {})
-        bb.plain(
-            "yocache summary: reused %d sstate + %d download object(s), "
-            "saving ~%s of rebuild time | contributed %d sstate + %d "
-            "download object(s), worth ~%s to your teammates" % (
-                dn_ss.get("count", 0), dn_dl.get("count", 0), _hms(dn_ss.get("seconds", 0)),
-                up_ss.get("count", 0), up_dl.get("count", 0), _hms(up_ss.get("seconds", 0)),
-            )
-        )
+
+        clauses = []
+        reused_bits = _object_bits(dn_ss, dn_dl)
+        if reused_bits:
+            clause = "reused %s object(s)" % " + ".join(reused_bits)
+            if dn_ss.get("count", 0):
+                clause += ", saving ~%s of rebuild time" % _hms(dn_ss.get("seconds", 0))
+            clauses.append(clause)
+        contributed_bits = _object_bits(up_ss, up_dl)
+        if contributed_bits:
+            clause = "contributed %s object(s)" % " + ".join(contributed_bits)
+            if up_ss.get("count", 0):
+                clause += ", worth ~%s to your teammates, you rock! ❤️" % _hms(up_ss.get("seconds", 0))
+            clauses.append(clause)
+
+        # Nothing on either side (e.g. a build with no cache interaction at
+        # all) — say nothing rather than an empty "yocache summary:" line.
+        if not clauses:
+            clauses.append("not used in this build")
+        bb.plain("yocache summary: " + " | ".join(clauses))
 
     # One-time setup gate: complain LOUDLY (but never abort) if "toaster" is
     # missing from the global INHERIT. MissedSstate — yocache's richest sstate

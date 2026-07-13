@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+- Build-end cache-benefit summary line no longer pads in a misleading
+  "0 download object(s)" / "saving ~00:00:00" clause for a side (reused or
+  contributed) the build never actually touched.
+
 ## v0.1.3 - 2026-07-12
 
 ### Added
