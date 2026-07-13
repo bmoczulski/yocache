@@ -5,6 +5,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `meta-yocache` now declares `kirkstone` in `LAYERSERIES_COMPAT_yocache`.
+
 ## v0.1.4 - 2026-07-13
 
 ### Fixed
