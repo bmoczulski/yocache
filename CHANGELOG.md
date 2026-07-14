@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.6 - 2026-07-14
+
 ### Fixed
 - sstate build-time attribution now credits upstream, non-sstate-cacheable
   tasks (`do_fetch`/`do_unpack`/`do_patch`/`do_configure`/`do_compile`/
