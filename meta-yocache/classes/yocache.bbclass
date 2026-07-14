@@ -171,6 +171,80 @@ def _yocache_premirrors(d):
 YOCACHE_PREMIRRORS = "${@'' if _yocache_skip_fetch(d, 'downloads') else _yocache_premirrors(d)}"
 YOCACHE_SS_MIRRORS = "${@'' if _yocache_skip_fetch(d, 'sstate') else 'file://.* ' + d.getVar('YOCACHE_SS_URL') + ' \\n '}"
 
+# --- Per-recipe task-time ledger -------------------------------------------
+# Backs the build-time attribution described near yocache_task_started
+# below: a plain-text, append-only file (one "<task> <ms>" line per real
+# task completion) under ${T}, so a downstream sstate task can credit
+# itself with the wall-clock time of every upstream (non-sstate) task that
+# fed it, not just its own. ${T} = ${WORKDIR}/temp, and bitbake's own
+# _exec_task creates it unconditionally for every task before TaskStarted
+# even fires, so there's no directory race to guard against here.
+#
+# Locking uses a dedicated sibling path (<ledger>.lock), never the ledger
+# file itself: bb.utils.lockfile() opens whatever path it's given and holds
+# its own fd on it for the lock's duration, so using a separate path keeps
+# that fd completely independent of this code's own open() calls on the
+# ledger's actual content.
+def _yocache_ledger_path(d):
+    import os
+    return os.path.join(d.getVar("T"), "yocache-tasktimes.log")
+
+# Append one task's own elapsed ms, tagged with this invocation's BUILDNAME.
+# O(1): no read, no parse, no rewrite of existing content — cheap enough to
+# call on every single task completion in the build. The BUILDNAME tag is
+# what lets a sweep (below) tell "upstream work from THIS build" apart from
+# a leftover from an earlier, unrelated invocation of the same recipe in the
+# same WORKDIR (e.g. a partial/forced rebuild — "bitbake -c compile -f" —
+# that skips do_fetch entirely because its stamp is still valid, so nothing
+# ever resets the ledger between invocations).
+def _yocache_ledger_write(d, task, ms):
+    path = _yocache_ledger_path(d)
+    buildname = d.getVar("BUILDNAME") or ""
+    lf = bb.utils.lockfile(path + ".lock")
+    if lf is None:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write("%s %s %d\n" % (buildname, task, ms))
+    except Exception as exc:
+        bb.note("yocache: ledger append failed: %s" % exc)
+    finally:
+        bb.utils.unlockfile(lf)
+
+# Sum only the lines tagged with THIS invocation's BUILDNAME, then truncate
+# the ledger to empty so the next sstate task to consume it starts from
+# zero. A line tagged with a different (or missing) BUILDNAME is a leftover
+# from an earlier, unrelated invocation — silently ignored, never credited
+# to this build, and flushed out by the truncate below regardless. A
+# malformed line (e.g. a torn write from a crash) is skipped the same way —
+# telemetry must never break a build. Returns 0 on any failure.
+def _yocache_ledger_sweep_and_clear(d):
+    path = _yocache_ledger_path(d)
+    buildname = d.getVar("BUILDNAME") or ""
+    lf = bb.utils.lockfile(path + ".lock")
+    if lf is None:
+        return 0
+    total = 0
+    try:
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 3 and parts[0] == buildname:
+                        try:
+                            total += int(parts[2])
+                        except ValueError:
+                            pass
+        except FileNotFoundError:
+            pass
+        with open(path, "w"):
+            pass  # truncate — also flushes out any foreign-BUILDNAME lines
+    except Exception as exc:
+        bb.note("yocache: ledger sweep failed: %s" % exc)
+    finally:
+        bb.utils.unlockfile(lf)
+    return total
+
 # Dunfell..Honister require _prepend; Kirkstone+ require :prepend.
 # LAYERSERIES_CORENAMES is set by meta/conf/layer.conf and is available here.
 require classes/${@'yocache-mirrors-compat.inc' if bb.utils.filter('LAYERSERIES_CORENAMES', 'dunfell gatesgarth hardknott honister', d) else 'yocache-mirrors-new.inc'}
@@ -614,18 +688,76 @@ yocache_eventhandler[eventmask] = "${YOCACHE_EVENTS}"
 # All failures are caught — an upload must never break a build.
 
 # Wall-clock task timing, so an uploaded sstate artifact can carry "this took
-# N seconds to build" to the server. Mirrors buildstats.bbclass's own trick
-# (classes-global/buildstats.bbclass): stash the start time in the datastore
-# on TaskStarted, read it back at the end of the same task. Both fire in the
-# same forked worker process for that one task, so a plain d.setVar/d.getVar
-# round trip is enough — no IPC, no opt-in buildstats class required. Kept as
-# its own minimal addhandler, separate from yocache_eventhandler above: this
-# is local bookkeeping only (no POST, no YOCACHE_LOG entry).
+# N seconds to build" to the server — including the upstream, non-sstate
+# tasks (do_fetch/do_unpack/do_patch/do_configure/do_compile/do_install, none
+# of which are ever in SSTATETASKS) that a cache hit on THIS artifact also
+# lets bitbake skip. That upstream time can't be measured inside a single
+# task the way buildstats.bbclass measures its own (classes-global/
+# buildstats.bbclass: stash start on TaskStarted, read back on TaskSucceeded
+# in the same forked worker process) — it has to be carried across several
+# different tasks' separate forked processes, i.e. persisted to disk. See
+# the per-recipe task-time ledger helpers above (_yocache_ledger_*).
+#
+# The mechanism, in three pieces:
+#   1. yocache_task_started (below): stash this task's own start time, same
+#      as before. Every ledger line is tagged with BUILDNAME at write time
+#      (see _yocache_ledger_write), so — unlike an earlier version of this
+#      mechanism — there's no need to guess when a build is "starting over"
+#      (e.g. by resetting on do_fetch): a partial/forced rebuild that skips
+#      do_fetch (its stamp still valid) gets its own fresh BUILDNAME anyway,
+#      so anything it writes is automatically distinguishable from — and
+#      never mixed with — a leftover from an earlier, unrelated invocation
+#      of the same recipe in the same WORKDIR.
+#   2. yocache_task_finished (bb.build.TaskSucceeded, new): for every real
+#      task, appends its own elapsed ms to the ledger — UNLESS the stash is
+#      already gone, which happens whenever this same task is itself
+#      sstate-cacheable and yocache_notify_sstate (below) already consumed
+#      it. That single consume-on-read (d.delVar) is what stops a task's
+#      own time from being reported twice — once directly by its own sstate
+#      upload, and again by whichever later task sweeps the ledger. It also
+#      means no SSTATETASKS lookup is needed here to know "this task
+#      already reported itself". _setscene tasks (cache-hit restores) are
+#      excluded explicitly instead: sstate.bbclass never wraps them with
+#      sstate_task_prefunc/postfunc, so their stash is never consumed by
+#      step 3, and restore latency must not be credited as rebuild time.
+#   3. yocache_notify_sstate (below): sweeps and clears the ledger, crediting
+#      only this invocation's own BUILDNAME-tagged lines (anything else is a
+#      foreign leftover, ignored but still flushed out by the clear), and
+#      adds that total to its own task's elapsed time. Whichever sstate
+#      sibling gets there first (e.g. do_populate_sysroot vs. do_package,
+#      which can run in genuinely parallel forked processes) claims the
+#      whole currently-unclaimed pool; the loser finds it already empty.
+#      Because an ancestor task's TaskSucceeded (hence its ledger append)
+#      always completes before any descendant even starts, the only real
+#      race is sibling vs. sibling, which the ledger's lock resolves — each
+#      millisecond is claimed exactly once.
 python yocache_task_started () {
     d.setVar("__yocache_task_started", e.time)
 }
 addhandler yocache_task_started
 yocache_task_started[eventmask] = "bb.build.TaskStarted"
+
+# Records every real task's own elapsed time into the per-recipe ledger, for
+# a later sstate task to absorb. See the three-piece mechanism described
+# above yocache_task_started. Deliberately its own addhandler, separate from
+# yocache_eventhandler: local bookkeeping only, no POST, no YOCACHE_LOG entry
+# — same reasoning as yocache_task_started itself.
+python yocache_task_finished () {
+    import time
+    task = getattr(e, "task", None)
+    if not task or task.endswith("_setscene"):
+        return
+    started = d.getVar("__yocache_task_started", False)
+    if started is None:
+        # Either never stashed, or already consumed by this same task's own
+        # yocache_notify_sstate (it deletes the stash right after using it)
+        # — either way, nothing new to credit.
+        return
+    ms = int(round((time.time() - started) * 1000))
+    _yocache_ledger_write(d, task, ms)
+}
+addhandler yocache_task_finished
+yocache_task_finished[eventmask] = "bb.build.TaskSucceeded"
 
 # After an sstate archive is created and signed, hand it (and its sidecars) to
 # the uploader. SSTATE_PKG is the finished blob; runs in SSTATE_BUILDDIR (see
@@ -648,16 +780,28 @@ python yocache_notify_sstate () {
             return
 
         # Wall-clock time this task took to run, if yocache_task_started caught
-        # its start above. Stashed as a plain datastore var so it flows out
-        # through recipe_meta below, exactly like PN/PV/etc., and reaches the
-        # server as the X-BitBake-var-YOCACHE_BUILD_MS PUT header.
-        # Milliseconds, not whole seconds: most sstate-producing tasks (e.g.
-        # admin/packaging steps, *-native quick builds) finish in well under a
-        # second, and int()-truncating to whole seconds would report 0 for
-        # every one of them.
+        # its start above, PLUS whatever upstream (non-sstate) task time this
+        # sstate object also lets bitbake skip (see the ledger mechanism
+        # described above yocache_task_started). Stashed as a plain datastore
+        # var so it flows out through recipe_meta below, exactly like
+        # PN/PV/etc., and reaches the server as the
+        # X-BitBake-var-YOCACHE_BUILD_MS PUT header. Milliseconds, not whole
+        # seconds: most sstate-producing tasks (e.g. admin/packaging steps,
+        # *-native quick builds) finish in well under a second, and
+        # int()-truncating to whole seconds would report 0 for every one of
+        # them.
         _started = d.getVar("__yocache_task_started", False)
+        _now = time.time()
         if _started is not None:
-            d.setVar("YOCACHE_BUILD_MS", str(int(round((time.time() - _started) * 1000))))
+            # Consume the stash: this is what tells yocache_task_finished
+            # (bb.build.TaskSucceeded, fires after this postfunc) that this
+            # task's own time has already been reported here, so it must not
+            # write it into the ledger too — that would let a later sstate
+            # task absorb it a second time.
+            d.delVar("__yocache_task_started")
+            own_ms = int(round((_now - _started) * 1000))
+            absorbed_ms = _yocache_ledger_sweep_and_clear(d)
+            d.setVar("YOCACHE_BUILD_MS", str(own_ms + absorbed_ms))
 
         sock = d.getVar("YOCACHE_UPLOAD_SOCK")
         sstate_dir = d.getVar("SSTATE_DIR")

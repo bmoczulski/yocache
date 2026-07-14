@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+- sstate build-time attribution now credits upstream, non-sstate-cacheable
+  tasks (`do_fetch`/`do_unpack`/`do_patch`/`do_configure`/`do_compile`/
+  `do_install`) to whichever downstream sstate object also lets bitbake skip
+  them, instead of only reporting that object's own (typically sub-second)
+  packaging time. Previously a compile-heavy recipe's reported "time saved"
+  could be off by orders of magnitude, since `do_compile` itself is never a
+  cache-eligible task in a typical build.
+
 ## v0.1.5 - 2026-07-13
 
 ### Added
