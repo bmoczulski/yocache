@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- Project website under `site/` (Astro + Starlight): landing page plus
+  user-facing docs — getting started, why YoCache, server & client
+  configuration, FAQ. Static site only; deployment comes later.
+
 ## v0.1.6 - 2026-07-14
 
 ### Fixed

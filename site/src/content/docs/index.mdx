@@ -1,40 +1,73 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: YoCache
+description: Smart cache sharing for Yocto builds — a shared, writable sstate and downloads mirror with automatic uploads.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
+  title: Smart cache sharing for Yocto builds
+  tagline: Forget rsync sessions to an HTTP server. YoCache hooks into your bitbake builds, uploads artifacts automatically, and serves them back to everyone — one line of config away.
   image:
-    file: ../../assets/houston.webp
+    file: ../../assets/team-cache-flow.svg
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Get started
+      link: /getting-started/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+    - text: View on GitHub
+      link: https://github.com/bmoczulski/yocache
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-## Next steps
+## Why teams pick YoCache
 
 <CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
+	<Card title="Faster builds for everyone" icon="rocket">
+		Every sstate object and source download produced by one machine becomes
+		instantly available to every developer and CI node on the team.
 	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
+	<Card title="Uploads happen by themselves" icon="cloud-download">
+		bitbake pushes artifacts to the cache the moment they're created. No rsync
+		jobs, no cron, no "who refreshes the mirror" rota.
 	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
+	<Card title="One line of config" icon="pencil">
+		Add the layer, set the cache URL, and `INHERIT += "yocache"` — mirrors are
+		wired up for you on every build.
 	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
+	<Card title="Single static binary" icon="laptop">
+		The server is one self-contained executable with zero runtime
+		dependencies. Drop it on any Linux or macOS box and it's running.
 	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
+	<Card title="Hash equivalence built in" icon="puzzle">
+		A persistent hash-equivalence server ships inside the same binary — fewer
+		needless rebuilds, one more line of config, no extra service to operate.
+	</Card>
+	<Card title="Set-and-forget storage" icon="setting">
+		Give it a size quota and it keeps itself tidy, evicting the
+		least-recently-used artifacts. Concurrent uploads are safe by design.
 	</Card>
 </CardGrid>
+
+## Up and running in three steps
+
+<Steps>
+
+1. **Run the server.** Download a release binary and start it — that's the
+   whole deployment:
+
+   ```sh
+   ./yocache
+   ```
+
+2. **Point your build at it.** Add `meta-yocache` to your layers and two
+   lines to your config:
+
+   ```
+   YOCACHE_URL = "http://yourcache.local:6768"
+   INHERIT += "yocache"
+   ```
+
+3. **Build.** The first build fills the cache; every build after that — on
+   any machine — pulls from it and tops it up automatically.
+
+</Steps>

@@ -4,22 +4,21 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
+	// TODO: replace with the real domain once purchased; the site is designed
+	// to be served at the domain root (no `base` path).
+	site: 'https://yocache.example.com',
 	integrations: [
 		starlight({
-			title: 'My Docs',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
+			title: 'YoCache',
+			description:
+				'Smart cache sharing for Yocto builds — a shared, writable sstate and downloads mirror with automatic uploads.',
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/bmoczulski/yocache' }],
 			sidebar: [
-				{
-					label: 'Guides',
-					items: [
-						// Each item here is one entry in the navigation menu.
-						{ label: 'Example Guide', slug: 'guides/example' },
-					],
-				},
-				{
-					label: 'Reference',
-					items: [{ autogenerate: { directory: 'reference' } }],
-				},
+				{ label: 'Getting started', slug: 'getting-started' },
+				{ label: 'Why YoCache', slug: 'why-yocache' },
+				{ label: 'Server configuration', slug: 'server-configuration' },
+				{ label: 'Client configuration', slug: 'client-configuration' },
+				{ label: 'FAQ', slug: 'faq' },
 			],
 		}),
 	],
