@@ -5,11 +5,15 @@ description: Frequently asked questions about YoCache.
 
 ## Which Yocto releases does it work with?
 
-The `meta-yocache` layer declares compatibility with **dunfell**,
-**kirkstone**, and current releases, and more are being validated. The
-optional hash-equivalence integration uses bitbake's WebSocket transport,
-which requires **scarthgap or newer** — on older releases simply leave
-`BB_HASHSERVE` unset and everything else works the same.
+The `meta-yocache` layer declares compatibility with every release from
+**dunfell** through the current **wrynose** (dunfell, gatesgarth, hardknott,
+honister, kirkstone, langdale, mickledore, nanbield, scarthgap, styhead,
+walnascar, wrynose). Dunfell, kirkstone, and wrynose are build-tested
+end-to-end; the releases in between share the same code paths as one of
+those three, so they're covered too. The optional hash-equivalence
+integration uses bitbake's WebSocket transport, which requires **scarthgap
+or newer** — on older releases simply leave `BB_HASHSERVE` unset and
+everything else works the same.
 
 ## Can a cache problem break my build?
 

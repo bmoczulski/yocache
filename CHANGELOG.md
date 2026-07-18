@@ -17,6 +17,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   hash-equivalence store size: `hashequiv_taskhashes` (recorded
   taskhash->unihash mappings), `hashequiv_unihashes` (distinct unihashes,
   the dedup signal), and `hashequiv_outhashes` (recorded outhash records).
+- `meta-yocache` now declares every Yocto release from `dunfell` through
+  `wrynose` in `LAYERSERIES_COMPAT_yocache`, closing the gap between the
+  previously-declared dunfell/kirkstone/wrynose.
 
 ### Changed
 - **Breaking:** the five path flags (`--db`, `--downloads`, `--sstate`,
