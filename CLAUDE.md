@@ -61,16 +61,22 @@ the other.
 
 ## Storage & persistence
 
-- **Blobs** live on the filesystem: `var/downloads` and `var/sstate` (flags
-  `--downloads` / `--sstate`). Uploads are crash- and reader-safe: the body is
+All persistent state nests under one root, `--data-dir` (default `var`):
+the operational database (`yocache.db`), the two blob stores (`downloads/`,
+`sstate/`), and the two audit logs (`yocache.ledger.jsonl`,
+`yocache.access.jsonl`). There is no way to split them across separate
+locations — one root, one thing to mount/back up/point a Docker volume at.
+
+- **Blobs** live on the filesystem under `<data-dir>/downloads` and
+  `<data-dir>/sstate`. Uploads are crash- and reader-safe: the body is
   streamed to a private `.uploads/<token>/` staging dir and atomically
   `rename(2)`d into place only after a full, fsync'd write. `PUT` requires
   `If-None-Match` and `Content-Length`; a same-size existing blob is skipped
   (`412`), a size mismatch is a `409` conflict — except growing VCS mirror
   tarballs (`git2_`/`gitshallow_`/`hg_`/`repo_`), which are allowed to replace a
   smaller stored snapshot.
-- **Operational state** is a single **SQLite (WAL)** database (`--db`,
-  default `var/yocache.db`) shared by all stores. Schema lives in
+- **Operational state** is a single **SQLite (WAL)** database at
+  `<data-dir>/yocache.db` shared by all stores. Schema lives in
   [cmd/yocache/migrations/](cmd/yocache/migrations/) and is applied at startup by
   goose (`//go:embed`). Tables: `unihashes`/`outhashes` (hash-equiv) and `blobs`
   (per-blob size + `accessed_at`, the source of truth for eviction order).
@@ -81,9 +87,10 @@ the other.
   [eviction.go](cmd/yocache/eviction.go), and
   [blob_inventory.go](cmd/yocache/blob_inventory.go).
 - **Two JSONL audit logs** (append-only, jq/DuckDB-friendly — see
-  [ledger.go](cmd/yocache/ledger.go)): the **ledger** (`--ledger`) records
-  server state mutations (`artifact.added`, `artifact.evicted`, `quota.exceeded`,
-  `hash.equiv_set`); the **access log** (`--access-log`) records
+  [ledger.go](cmd/yocache/ledger.go)): the **ledger**
+  (`<data-dir>/yocache.ledger.jsonl`) records server state mutations
+  (`artifact.added`, `artifact.evicted`, `quota.exceeded`, `hash.equiv_set`);
+  the **access log** (`<data-dir>/yocache.access.jsonl`) records
   `artifact.fetched` / `artifact.missed`. Both are drained by a dedicated
   goroutine so a slow/full log never stalls a request.
 - **DuckDB** is used only for offline analytics over the JSONL logs (the

@@ -102,7 +102,7 @@ func (q *quotaTracker) release(n int64) {
 //     the rename atomic and avoids appending a suffix to a name that may already
 //     be near the filesystem's 255-byte limit.
 type blobUploader struct {
-	dir       string           // blob store directory (e.g. the --downloads path)
+	dir       string           // blob store directory (e.g. <data-dir>/downloads)
 	uploadDir string           // staging area: dir/.uploads; per-request tmpDirs live here
 	kind      string           // leading path segment, e.g. "downloads"; stripped to get the name
 	log       *slog.Logger

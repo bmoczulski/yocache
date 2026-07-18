@@ -10,6 +10,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   user-facing docs — getting started, why YoCache, server & client
   configuration, FAQ. Static site only; deployment comes later.
 
+### Changed
+- **Breaking:** the five path flags (`--db`, `--downloads`, `--sstate`,
+  `--ledger`, `--access-log`) are replaced by a single `--data-dir` (default
+  `var`, same on-disk layout underneath: `yocache.db`, `downloads/`, `sstate/`,
+  `yocache.ledger.jsonl`, `yocache.access.jsonl`). Anything passing the old
+  flags needs to switch to `--data-dir` pointing at one root — this also
+  clears the way for a single Docker volume mount instead of five.
+
 ## v0.1.6 - 2026-07-14
 
 ### Fixed

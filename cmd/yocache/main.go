@@ -69,12 +69,8 @@ type sstateMeta struct {
 
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
-	dbPath := flag.String("db", "var/yocache.db", "path to the SQLite operational database")
-	downloadsDir := flag.String("downloads", "var/downloads", "directory for the downloads (DL mirror) blob store")
-	sstateDir := flag.String("sstate", "var/sstate", "directory for the sstate blob store")
+	dataDir := flag.String("data-dir", "var", "root directory for all persistent state: operational database, blob stores, and audit logs")
 	quotaStr := flag.String("quota", "0", "total storage quota for all blob stores (e.g. 500MiB, 10GB); 0 means unlimited")
-	ledgerPath := flag.String("ledger", "var/yocache.ledger.jsonl", "path to the mutation ledger: artifact.added, artifact.evicted (created if absent)")
-	accessLogPath := flag.String("access-log", "var/yocache.access.jsonl", "path to the access log: artifact.fetched, artifact.missed (created if absent)")
 	buildStatsTTL := flag.Duration("build-stats-ttl", 30*24*time.Hour, "how long to retain per-build download stats before garbage collection (Go duration syntax, e.g. 720h)")
 	var evictPolicies []string
 	flag.Func("evict", "eviction `policy` to enable (lru, lru-sstate); repeat to chain policies in order", func(v string) error {
@@ -107,60 +103,64 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Operational state lives in a single SQLite file shared by all stores.
-	// Make the parent dir so the default "var/" path works out of the box.
-	if dir := filepath.Dir(*dbPath); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Error("cannot create database directory", "dir", dir, "err", err)
-			os.Exit(1)
-		}
+	// All persistent state (db, blob stores, audit logs) nests under one root
+	// so the default "var/" path works out of the box.
+	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
+		log.Error("cannot create data directory", "dir", *dataDir, "err", err)
+		os.Exit(1)
 	}
-	db, err := openOperationalDB(*dbPath)
+	dbPath := filepath.Join(*dataDir, "yocache.db")
+	downloadsDir := filepath.Join(*dataDir, "downloads")
+	sstateDir := filepath.Join(*dataDir, "sstate")
+	ledgerPath := filepath.Join(*dataDir, "yocache.ledger.jsonl")
+	accessLogPath := filepath.Join(*dataDir, "yocache.access.jsonl")
+
+	db, err := openOperationalDB(dbPath)
 	if err != nil {
-		log.Error("cannot open operational db", "path", *dbPath, "err", err)
+		log.Error("cannot open operational db", "path", dbPath, "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 	if err := migrateDB(db); err != nil {
-		log.Error("cannot migrate operational db", "path", *dbPath, "err", err)
+		log.Error("cannot migrate operational db", "path", dbPath, "err", err)
 		os.Exit(1)
 	}
-	log.Info("operational db ready", "path", *dbPath)
+	log.Info("operational db ready", "path", dbPath)
 	store := &hashEquivStore{db: db}
 	inv := openBlobInventory(db)
 
-	ledger, err := openLedger(*ledgerPath, log)
+	ledger, err := openLedger(ledgerPath, log)
 	if err != nil {
-		log.Error("cannot open ledger", "path", *ledgerPath, "err", err)
+		log.Error("cannot open ledger", "path", ledgerPath, "err", err)
 		os.Exit(1)
 	}
 	defer ledger.Close()
-	log.Info("ledger ready", "path", *ledgerPath)
+	log.Info("ledger ready", "path", ledgerPath)
 
-	accessLog, err := openLedger(*accessLogPath, log)
+	accessLog, err := openLedger(accessLogPath, log)
 	if err != nil {
-		log.Error("cannot open access log", "path", *accessLogPath, "err", err)
+		log.Error("cannot open access log", "path", accessLogPath, "err", err)
 		os.Exit(1)
 	}
 	defer accessLog.Close()
-	log.Info("access log ready", "path", *accessLogPath)
+	log.Info("access log ready", "path", accessLogPath)
 
 	// Blob stores for the two writable path spaces (DL mirror + sstate). Each
 	// creates its dir and wipes the .uploads staging subtree left by an earlier
 	// run; see upload.go for the staging scheme. A bad path is fatal — upload to
 	// that space would be permanently broken.
 	qt := &quotaTracker{limit: quotaBytes}
-	downloads, err := newBlobUploader(*downloadsDir, "downloads", log, ledger, accessLog, qt, inv, nil)
+	downloads, err := newBlobUploader(downloadsDir, "downloads", log, ledger, accessLog, qt, inv, nil)
 	if err != nil {
 		log.Error("cannot init downloads store", "err", err)
 		os.Exit(1)
 	}
-	sstate, err := newBlobUploader(*sstateDir, "sstate", log, ledger, accessLog, qt, inv, nil)
+	sstate, err := newBlobUploader(sstateDir, "sstate", log, ledger, accessLog, qt, inv, nil)
 	if err != nil {
 		log.Error("cannot init sstate store", "err", err)
 		os.Exit(1)
 	}
-	qt.seed(*downloadsDir, *sstateDir)
+	qt.seed(downloadsDir, sstateDir)
 	if qt.limit > 0 {
 		log.Info("storage quota active",
 			"limit_bytes", qt.limit, "limit", humanize.Bytes(uint64(qt.limit)),
@@ -172,7 +172,7 @@ func main() {
 	// Seed the inventory with blobs already on disk that have no DB record yet
 	// (pre-existing before this tracking existed, or added out-of-band) so both
 	// eviction ordering and the startup stats summary below reflect reality.
-	stores := map[string]string{"downloads": *downloadsDir, "sstate": *sstateDir}
+	stores := map[string]string{"downloads": downloadsDir, "sstate": sstateDir}
 	if err := inv.Retrofit(stores); err != nil {
 		log.Error("inventory retrofit failed", "err", err)
 		os.Exit(1)
@@ -194,7 +194,7 @@ func main() {
 		case "lru-sstate":
 			policies = append(policies, &LRUPolicy{
 				inventory: inv,
-				stores:    map[string]string{"sstate": *sstateDir},
+				stores:    map[string]string{"sstate": sstateDir},
 				quota:     qt,
 				ledger:    ledger,
 				log:       log,

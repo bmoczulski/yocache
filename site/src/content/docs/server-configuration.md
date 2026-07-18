@@ -13,13 +13,9 @@ and every flag has a sensible default:
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--addr` | `:6768` | Address the HTTP server listens on. |
-| `--downloads` | `var/downloads` | Directory for the shared source downloads (DL mirror). |
-| `--sstate` | `var/sstate` | Directory for the shared sstate cache. |
-| `--db` | `var/yocache.db` | Path to the server's operational database (a single SQLite file). |
+| `--data-dir` | `var` | Root directory for all persistent state: the operational database (`yocache.db`), the blob stores (`downloads/`, `sstate/`), and the audit logs (`yocache.ledger.jsonl`, `yocache.access.jsonl`). |
 | `--quota` | `0` (unlimited) | Total storage cap for all cached artifacts, e.g. `500GiB`. When full, eviction (below) frees space on demand. |
 | `--evict` | *(none)* | Eviction policy used when the quota is reached: `lru` removes the least-recently-used artifacts first, `lru-sstate` restricts that to sstate objects. Repeat the flag to chain policies in order. |
-| `--ledger` | `var/yocache.ledger.jsonl` | Append-only log of cache changes: artifacts added and evicted. |
-| `--access-log` | `var/yocache.access.jsonl` | Append-only log of cache traffic: artifacts fetched and missed. |
 | `--block-recipe` | *(none)* | Recipe name whose artifacts the cache should refuse to store or serve — an escape hatch for a recipe known to produce broken sstate. Repeat to block more. Never affects source downloads. |
 | `--build-stats-ttl` | `720h` (30 days) | How long to retain per-build download statistics. |
 
