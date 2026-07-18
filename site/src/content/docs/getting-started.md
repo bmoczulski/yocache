@@ -23,6 +23,9 @@ By default it listens on port `6768` and stores artifacts under `var/` in the
 current directory — see [Server configuration](../server-configuration/) for
 the flags that change this.
 
+Prefer a container? See [Running with Docker](../docker/) for `docker run`,
+`podman run`, and Docker Compose examples.
+
 Quick check once it's running:
 
 ```sh

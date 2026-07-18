@@ -38,6 +38,11 @@ import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 		The server is one self-contained executable with zero runtime
 		dependencies. Drop it on any Linux or macOS box and it's running.
 	</Card>
+	<Card title="Ships as a container too" icon="server">
+		Multi-arch images published on every release to both GHCR and Docker
+		Hub, non-root by default. `docker run` and you're done — see
+		[Running with Docker](../docker/).
+	</Card>
 	<Card title="Hash equivalence built in" icon="puzzle">
 		A persistent hash-equivalence server ships inside the same binary — fewer
 		needless rebuilds, one more line of config, no extra service to operate.
