@@ -219,7 +219,7 @@ func main() {
 	downloads.eviction = evMgr
 	sstate.eviction = evMgr
 
-	if err := logStartupStats(log, inv); err != nil {
+	if err := logStartupStats(log, inv, store); err != nil {
 		log.Error("startup stats failed", "err", err)
 	}
 
@@ -266,7 +266,7 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
 	mux.HandleFunc("GET /version", versionHandler(ver))
-	mux.HandleFunc("GET /api/stats", statsHandler(inv, log))
+	mux.HandleFunc("GET /api/stats", statsHandler(inv, store, log))
 	mux.HandleFunc("GET /api/build-stats/{buildname}", buildStatsHandler(inv, log))
 
 	// Hash-equivalence server, spoken over WebSocket on this same port. Point a

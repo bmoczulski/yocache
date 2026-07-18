@@ -27,6 +27,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 // hashEquivStore is the SQLite-backed hash-equivalence database. database/sql's
@@ -104,6 +105,25 @@ func (s *hashEquivStore) insertOuthash(rec outhashRecord) error {
 		rec.Method, rec.Outhash, rec.Taskhash, rec.Unihash,
 	)
 	return err
+}
+
+// Stats returns counts describing the hash-equivalence store: TaskHashes is
+// the number of recorded taskhash->unihash mappings, Unihashes is how many
+// distinct unihashes those collapse to (the dedup signal — TaskHashes minus
+// Unihashes is how many taskhashes were spared a rebuild), and Outhashes is
+// the number of recorded outhash records.
+func (s *hashEquivStore) Stats() (*hashEquivStats, error) {
+	st := &hashEquivStats{}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM unihashes`).Scan(&st.TaskHashes); err != nil {
+		return nil, fmt.Errorf("hashequiv stats taskhashes: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT unihash) FROM unihashes`).Scan(&st.Unihashes); err != nil {
+		return nil, fmt.Errorf("hashequiv stats unihashes: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM outhashes`).Scan(&st.Outhashes); err != nil {
+		return nil, fmt.Errorf("hashequiv stats outhashes: %w", err)
+	}
+	return st, nil
 }
 
 // getOuthash returns the record stored for (method, outhash).

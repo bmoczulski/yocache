@@ -126,3 +126,28 @@ func TestPersistAcrossReopen(t *testing.T) {
 		t.Fatalf("after reopen: got %q ok=%v err=%v, want uniA/true", u, ok, err)
 	}
 }
+
+func TestStats(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	// A second taskhash that happens to produce the same unihash: two
+	// taskhashes, but only one distinct unihash.
+	if _, err := s.insertUnihash("m", "task2", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+		t.Fatalf("insertOuthash: %v", err)
+	}
+
+	got, err := s.Stats()
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	want := &hashEquivStats{TaskHashes: 2, Unihashes: 1, Outhashes: 1}
+	if *got != *want {
+		t.Errorf("Stats() = %+v, want %+v", *got, *want)
+	}
+}

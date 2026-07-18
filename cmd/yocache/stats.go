@@ -245,11 +245,28 @@ type cacheStats struct {
 	SstateRecipes  int64  `json:"sstate_recipes"`
 	SstateBytes    int64  `json:"sstate_bytes"`
 	SstateSize     string `json:"sstate_size,omitempty"`
+
+	// HashEquivTaskHashes is the number of recorded taskhash->unihash
+	// mappings; HashEquivUnihashes is how many distinct unihashes those
+	// collapse to (the dedup signal); HashEquivOuthashes is the number of
+	// recorded outhash records.
+	HashEquivTaskHashes int64 `json:"hashequiv_taskhashes"`
+	HashEquivUnihashes  int64 `json:"hashequiv_unihashes"`
+	HashEquivOuthashes  int64 `json:"hashequiv_outhashes"`
 }
 
-// computeCacheStats queries the inventory DB live, so it reflects uploads and
-// evictions that happened since startup, not just the state at boot.
-func computeCacheStats(inv *blobInventory) (cacheStats, error) {
+// hashEquivStats is the hash-equivalence store's size, as reported by
+// hashEquivStore.Stats.
+type hashEquivStats struct {
+	TaskHashes int64
+	Unihashes  int64
+	Outhashes  int64
+}
+
+// computeCacheStats queries the inventory and hash-equiv DBs live, so it
+// reflects uploads, evictions, and hash-equiv reports that happened since
+// startup, not just the state at boot.
+func computeCacheStats(inv *blobInventory, hstore *hashEquivStore) (cacheStats, error) {
 	dlFiles, dlBytes, err := inv.CategoryStats("downloads")
 	if err != nil {
 		return cacheStats{}, err
@@ -258,22 +275,29 @@ func computeCacheStats(inv *blobInventory) (cacheStats, error) {
 	if err != nil {
 		return cacheStats{}, err
 	}
+	heStats, err := hstore.Stats()
+	if err != nil {
+		return cacheStats{}, err
+	}
 	return cacheStats{
-		DownloadsFiles: dlFiles,
-		DownloadsBytes: dlBytes,
-		DownloadsSize:  humanize.Bytes(uint64(dlBytes)),
-		SstateFiles:    ssFiles,
-		SstateRecipes:  ssRecipes,
-		SstateBytes:    ssBytes,
-		SstateSize:     humanize.Bytes(uint64(ssBytes)),
+		DownloadsFiles:      dlFiles,
+		DownloadsBytes:      dlBytes,
+		DownloadsSize:       humanize.Bytes(uint64(dlBytes)),
+		SstateFiles:         ssFiles,
+		SstateRecipes:       ssRecipes,
+		SstateBytes:         ssBytes,
+		SstateSize:          humanize.Bytes(uint64(ssBytes)),
+		HashEquivTaskHashes: heStats.TaskHashes,
+		HashEquivUnihashes:  heStats.Unihashes,
+		HashEquivOuthashes:  heStats.Outhashes,
 	}, nil
 }
 
 // logStartupStats emits a single log line summarizing what's already in the
 // blob stores at startup: file counts, the deduplicated sstate recipe count,
 // and cumulative size per category (exact bytes plus a human-readable form).
-func logStartupStats(log *slog.Logger, inv *blobInventory) error {
-	s, err := computeCacheStats(inv)
+func logStartupStats(log *slog.Logger, inv *blobInventory, hstore *hashEquivStore) error {
+	s, err := computeCacheStats(inv, hstore)
 	if err != nil {
 		return err
 	}
@@ -283,15 +307,18 @@ func logStartupStats(log *slog.Logger, inv *blobInventory) error {
 		"sstate_files", s.SstateFiles,
 		"sstate_recipes", s.SstateRecipes,
 		"sstate_bytes", s.SstateBytes, "sstate_size", s.SstateSize,
+		"hashequiv_taskhashes", s.HashEquivTaskHashes,
+		"hashequiv_unihashes", s.HashEquivUnihashes,
+		"hashequiv_outhashes", s.HashEquivOuthashes,
 	)
 	return nil
 }
 
 // statsHandler serves the same summary as logStartupStats as JSON, computed
 // fresh per request so it stays current between startups.
-func statsHandler(inv *blobInventory, log *slog.Logger) http.HandlerFunc {
+func statsHandler(inv *blobInventory, hstore *hashEquivStore, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s, err := computeCacheStats(inv)
+		s, err := computeCacheStats(inv, hstore)
 		if err != nil {
 			log.Error("stats handler failed", "err", err, "remote", r.RemoteAddr)
 			http.Error(w, "stats unavailable", http.StatusInternalServerError)

@@ -88,10 +88,15 @@ func TestStatsHandler(t *testing.T) {
 		"37/00/sstate:foo::1:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst",
 		10, 2)
 
+	hstore := &hashEquivStore{db: db}
+	if _, err := hstore.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	req := httptest.NewRequest("GET", "/api/stats", nil)
 	rec := httptest.NewRecorder()
-	statsHandler(inv, log)(rec, req)
+	statsHandler(inv, hstore, log)(rec, req)
 
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
@@ -103,6 +108,7 @@ func TestStatsHandler(t *testing.T) {
 	want := cacheStats{
 		DownloadsFiles: 1, DownloadsBytes: 100, DownloadsSize: "100 B",
 		SstateFiles: 1, SstateRecipes: 1, SstateBytes: 10, SstateSize: "10 B",
+		HashEquivTaskHashes: 1, HashEquivUnihashes: 1,
 	}
 	if got != want {
 		t.Errorf("stats = %+v, want %+v", got, want)

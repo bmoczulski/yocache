@@ -13,6 +13,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   variable (e.g. `YOCACHE_DATA_DIR`, `YOCACHE_ADDR`), with CLI flags still
   taking precedence over env vars over compiled-in defaults — the config
   path Docker and systemd deployments expect.
+- `GET /api/stats` (and the startup "cache inventory" log line) now report
+  hash-equivalence store size: `hashequiv_taskhashes` (recorded
+  taskhash->unihash mappings), `hashequiv_unihashes` (distinct unihashes,
+  the dedup signal), and `hashequiv_outhashes` (recorded outhash records).
 
 ### Changed
 - **Breaking:** the five path flags (`--db`, `--downloads`, `--sstate`,
