@@ -82,6 +82,10 @@ func main() {
 		blockListRecipes = append(blockListRecipes, v)
 		return nil
 	})
+	if err := applyEnvDefaults(flag.CommandLine); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	flag.Parse()
 
 	quotaUint, err := humanize.ParseBytes(*quotaStr)

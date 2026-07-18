@@ -1,0 +1,5 @@
+/* Keep the first column (flag names) from wrapping in the server config table. */
+.no-wrap-col1 table td:first-child,
+.no-wrap-col1 table th:first-child {
+	white-space: nowrap;
+}

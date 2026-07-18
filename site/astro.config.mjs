@@ -13,6 +13,7 @@ export default defineConfig({
 			description:
 				'Smart cache sharing for Yocto builds — a shared, writable sstate and downloads mirror with automatic uploads.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/bmoczulski/yocache' }],
+			customCss: ['./src/styles/custom.css'],
 			sidebar: [
 				{ label: 'Getting started', slug: 'getting-started' },
 				{ label: 'Why YoCache', slug: 'why-yocache' },

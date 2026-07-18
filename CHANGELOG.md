@@ -9,6 +9,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Project website under `site/` (Astro + Starlight): landing page plus
   user-facing docs — getting started, why YoCache, server & client
   configuration, FAQ. Static site only; deployment comes later.
+- Every server flag can now be set via a `YOCACHE_<FLAG>` environment
+  variable (e.g. `YOCACHE_DATA_DIR`, `YOCACHE_ADDR`), with CLI flags still
+  taking precedence over env vars over compiled-in defaults — the config
+  path Docker and systemd deployments expect.
 
 ### Changed
 - **Breaking:** the five path flags (`--db`, `--downloads`, `--sstate`,
