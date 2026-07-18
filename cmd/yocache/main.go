@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -69,6 +70,7 @@ type sstateMeta struct {
 
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
+	hashEquivTCPAddr := flag.String("hashequiv-addr", ":6767", "address the raw-TCP OEHASHEQUIV listener binds; empty disables it")
 	dataDir := flag.String("data-dir", "var", "root directory for all persistent state: operational database, blob stores, and audit logs")
 	quotaStr := flag.String("quota", "0", "total storage quota for all blob stores (e.g. 500MiB, 10GB); 0 means unlimited")
 	buildStatsTTL := flag.Duration("build-stats-ttl", 30*24*time.Hour, "how long to retain per-build download stats before garbage collection (Go duration syntax, e.g. 720h)")
@@ -269,10 +271,13 @@ func main() {
 	mux.HandleFunc("GET /api/stats", statsHandler(inv, store, log))
 	mux.HandleFunc("GET /api/build-stats/{buildname}", buildStatsHandler(inv, log))
 
-	// Hash-equivalence server, spoken over WebSocket on this same port. Point a
-	// build at it with BB_HASHSERVE = "ws://host:6768/hashequiv". See
-	// hashequiv.go for the protocol and the (thin, in-memory) store.
-	mux.HandleFunc("/hashequiv", newHashEquiv(store, log, ledger).handle)
+	// Hash-equivalence server. Spoken over WebSocket on this same port — point
+	// a build at it with BB_HASHSERVE = "ws://host:6768/hashequiv" — and,
+	// below, over raw TCP on --hashequiv-addr for pre-Scarthgap bitbake, which
+	// has no ws:// client. See hashequiv.go for the protocol and the (thin,
+	// in-memory) store.
+	he := newHashEquiv(store, log, ledger)
+	mux.HandleFunc("/hashequiv", he.handle)
 
 	// Build telemetry sink. yocache.bbclass POSTs one JSON report per
 	// bitbake event. We just decode and log it for now — no persistence
@@ -408,6 +413,24 @@ func main() {
 		}
 	}()
 
+	// Raw-TCP OEHASHEQUIV listener, a second port for pre-Scarthgap bitbake
+	// (see hashequiv_tcp.go). Opt out with --hashequiv-addr "".
+	var heTCP *heqTCPServer
+	if *hashEquivTCPAddr != "" {
+		ln, err := net.Listen("tcp", *hashEquivTCPAddr)
+		if err != nil {
+			log.Error("cannot start hashequiv TCP listener", "addr", *hashEquivTCPAddr, "err", err)
+			os.Exit(1)
+		}
+		heTCP = newHeqTCPServer(ln, he, log)
+		go func() {
+			log.Info("hashequiv TCP listening", "addr", *hashEquivTCPAddr)
+			if err := heTCP.serve(); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
 	select {
 	case err := <-errCh:
 		log.Error("server failed", "err", err)
@@ -421,6 +444,9 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
+	}
+	if heTCP != nil {
+		heTCP.shutdown(15 * time.Second)
 	}
 	bgTasks.Wait()
 	log.Info("shutdown complete")
