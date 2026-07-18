@@ -232,3 +232,13 @@ missing: `./goreleaser check` or `./goreleaser release --snapshot --clean`).
   Unreleased`, in the same commit/PR as the change — this is what the release
   workflow turns into GitHub Release notes (see "Release automation" above). A
   push to `main` with no new entry fails the release job outright.
+- **Every user-facing change also needs a `site/` update**, in the same
+  commit/PR — new/changed flags in
+  [server-configuration.md](site/src/content/docs/server-configuration.md),
+  new/changed bitbake variables in
+  [client-configuration.md](site/src/content/docs/client-configuration.md),
+  and anything that changes an answer already given in
+  [faq.md](site/src/content/docs/faq.md) or the setup snippet in
+  [getting-started.md](site/src/content/docs/getting-started.md). Unlike the
+  `CHANGELOG.md` check, nothing enforces this automatically — it's on the
+  author (human or agent) to remember.
