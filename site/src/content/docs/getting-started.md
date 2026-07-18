@@ -47,8 +47,10 @@ local_conf_header:
   yocache: |
     YOCACHE_URL = "http://yourcache.local:6768"
 
-    # OPTIONAL: use YoCache web-socket for hash-equiv in Yocto >= Scarthgap
-    # BB_HASHSERVE = "${@'ws://yourcache.local:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'auto'}"
+    # OPTIONAL: use YoCache as the hash-equivalence server — auto-picks the
+    # ws:// endpoint on Yocto >= Scarthgap, or the raw-TCP listener on older
+    # releases (whose bitbake has no ws:// client), same line either way
+    # BB_HASHSERVE = "${@'ws://yourcache.local:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'yourcache.local:6767'}"
 
     # "toaster" is necessary for YoCache to harvest MissedSstate events
     INHERIT += "toaster"
