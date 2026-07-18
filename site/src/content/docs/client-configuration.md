@@ -5,7 +5,7 @@ description: meta-yocache variables that control how your build uses the cache.
 
 Everything on the build side is a bitbake variable, set in
 `local.conf`/`site.conf` (or a kas `local_conf_header`) next to the
-`INHERIT += "yocache"` line — see [Getting started](/getting-started/) for
+`INHERIT += "yocache"` line — see [Getting started](../getting-started/) for
 the full setup snippet. Only `YOCACHE_URL` is normally needed; the rest are
 opt-outs and tuning knobs with working defaults.
 
@@ -45,4 +45,4 @@ YOCACHE_SKIP_UPLOAD = "1"
 ```
 
 For the server-side flags, see
-[Server configuration](/server-configuration/).
+[Server configuration](../server-configuration/).

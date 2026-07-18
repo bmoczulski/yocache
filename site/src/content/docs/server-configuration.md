@@ -40,4 +40,4 @@ downloads and sstate. Handy for dashboards and for confirming the cache is
 actually filling up.
 
 For the build-side knobs, see
-[Client configuration](/client-configuration/).
+[Client configuration](../client-configuration/).

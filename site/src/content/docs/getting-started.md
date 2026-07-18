@@ -20,7 +20,7 @@ Download a pre-built binary for your platform from the
 ```
 
 By default it listens on port `6768` and stores artifacts under `var/` in the
-current directory — see [Server configuration](/server-configuration/) for
+current directory — see [Server configuration](../server-configuration/) for
 the flags that change this.
 
 Quick check once it's running:

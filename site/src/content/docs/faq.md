@@ -15,7 +15,7 @@ integration works on every supported release: bitbake's WebSocket transport
 requires **scarthgap or newer** (`ws://yourcache.local:6768/hashequiv`), and
 older releases — whose hash-equivalence client has no `ws://` support — use
 the server's raw-TCP listener instead (`yourcache.local:6767`, on by
-default). See [Client configuration](/client-configuration/) for the
+default). See [Client configuration](../client-configuration/) for the
 `BB_HASHSERVE` values.
 
 ## Can a cache problem break my build?
