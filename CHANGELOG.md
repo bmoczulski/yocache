@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.8 - 2026-07-18
+
 ### Added
 - Multi-arch (linux/amd64, linux/arm64) Docker image, built and pushed on
   every release to GHCR (`ghcr.io/bmoczulski/yocache`) and Docker Hub
