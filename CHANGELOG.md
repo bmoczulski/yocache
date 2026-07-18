@@ -13,6 +13,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   variable (e.g. `YOCACHE_DATA_DIR`, `YOCACHE_ADDR`), with CLI flags still
   taking precedence over env vars over compiled-in defaults — the config
   path Docker and systemd deployments expect.
+- `--hashequiv-addr` (default `:6767`, on by default) opens a second,
+  dedicated raw-TCP listener speaking bitbake's legacy OEHASHEQUIV wire
+  protocol directly (no WebSocket), for pre-Scarthgap bitbake (Dunfell and
+  earlier) whose hash-equivalence client can't speak `ws://`. Point
+  `BB_HASHSERVE` at `host:6767` to use it instead of
+  `ws://host:6768/hashequiv`; pass `--hashequiv-addr ""` to disable it.
 - `GET /api/stats` (and the startup "cache inventory" log line) now report
   hash-equivalence store size: `hashequiv_taskhashes` (recorded
   taskhash->unihash mappings), `hashequiv_unihashes` (distinct unihashes,
