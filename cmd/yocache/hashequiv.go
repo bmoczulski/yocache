@@ -67,6 +67,16 @@ func newHashEquiv(store *hashEquivStore, log *slog.Logger, ledger *Ledger) *hash
 	return &hashEquiv{store: store, log: log, ledger: ledger}
 }
 
+// heqTransport is the send/recv contract serve/dispatch/handle* need from a
+// connection, satisfied by both heConn (WebSocket) and heTCPConn (raw TCP,
+// hashequiv_tcp.go).
+type heqTransport interface {
+	recv() (string, error)
+	send(msg string) error
+	recvMessage() (map[string]json.RawMessage, error)
+	sendMessage(v any) error
+}
+
 // heConn wraps a WebSocket with the send/recv helpers that mirror bb.asyncrpc's
 // StreamConnection: recv/send move one raw frame (a "line"), recvMessage/
 // sendMessage move one JSON frame. Over WebSocket framing is intrinsic, so there
@@ -139,7 +149,7 @@ func (h *hashEquiv) handle(w http.ResponseWriter, r *http.Request) {
 
 // serve runs the per-connection handshake then the message loop. It returns the
 // first transport error (including a normal close), which handle() classifies.
-func (h *hashEquiv) serve(c *heConn, remote string) error {
+func (h *hashEquiv) serve(c heqTransport, remote string) error {
 	// Handshake line: "OEHASHEQUIV <version>".
 	hello, err := c.recv()
 	if err != nil {
@@ -191,7 +201,7 @@ func (h *hashEquiv) serve(c *heConn, remote string) error {
 
 // dispatch handles one message. Each message is an object with a single command
 // key, mirroring bb.asyncrpc's dispatch_message.
-func (h *hashEquiv) dispatch(c *heConn, msg map[string]json.RawMessage) error {
+func (h *hashEquiv) dispatch(c heqTransport, msg map[string]json.RawMessage) error {
 	if _, ok := msg["get-stream"]; ok {
 		return h.handleStream(c, h.lookupStream)
 	}
@@ -226,7 +236,7 @@ func (h *hashEquiv) dispatch(c *heConn, msg map[string]json.RawMessage) error {
 // handleStream mirrors bb.asyncrpc._stream_handler: ack with a JSON-quoted "ok"
 // (the client reads it as a message), then for each raw line send fn(line) as a
 // raw frame, until "END" (or an empty line / close), then a raw "ok" ack.
-func (h *hashEquiv) handleStream(c *heConn, fn func(string) string) error {
+func (h *hashEquiv) handleStream(c heqTransport, fn func(string) string) error {
 	if err := c.sendMessage("ok"); err != nil {
 		return err
 	}
@@ -279,7 +289,7 @@ func (h *hashEquiv) existsStream(line string) string {
 	return "false"
 }
 
-func (h *hashEquiv) handleGet(c *heConn, raw json.RawMessage) error {
+func (h *hashEquiv) handleGet(c heqTransport, raw json.RawMessage) error {
 	var req struct {
 		Taskhash string `json:"taskhash"`
 		Method   string `json:"method"`
@@ -302,7 +312,7 @@ func (h *hashEquiv) handleGet(c *heConn, raw json.RawMessage) error {
 	})
 }
 
-func (h *hashEquiv) handleGetOuthash(c *heConn, raw json.RawMessage) error {
+func (h *hashEquiv) handleGetOuthash(c heqTransport, raw json.RawMessage) error {
 	var req struct {
 		Method   string `json:"method"`
 		Outhash  string `json:"outhash"`
@@ -327,7 +337,7 @@ func (h *hashEquiv) handleGetOuthash(c *heConn, raw json.RawMessage) error {
 	})
 }
 
-func (h *hashEquiv) handleReport(c *heConn, raw json.RawMessage) error {
+func (h *hashEquiv) handleReport(c heqTransport, raw json.RawMessage) error {
 	var req struct {
 		Method   string `json:"method"`
 		Taskhash string `json:"taskhash"`
@@ -366,7 +376,7 @@ func (h *hashEquiv) handleReport(c *heConn, raw json.RawMessage) error {
 	})
 }
 
-func (h *hashEquiv) handleReportEquiv(c *heConn, raw json.RawMessage) error {
+func (h *hashEquiv) handleReportEquiv(c heqTransport, raw json.RawMessage) error {
 	var req struct {
 		Method   string `json:"method"`
 		Taskhash string `json:"taskhash"`
