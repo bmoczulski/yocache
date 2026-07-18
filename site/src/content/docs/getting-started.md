@@ -81,9 +81,9 @@ BBLAYERS += "/path/to/yocache/meta-yocache"
 Then add the same configuration lines as in the kas snippet above to your
 `local.conf` or `site.conf`.
 
-## Build
+## Build your Yocto image
 
-That's it — build as usual. The first build populates the cache as it goes;
+That's it — run your bitbake build as usual. The first build populates the cache as it goes;
 every subsequent build, on any machine pointed at the same server, fetches
 what's already there and uploads whatever it had to build or download fresh.
 
