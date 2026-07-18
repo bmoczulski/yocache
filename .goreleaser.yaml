@@ -20,3 +20,49 @@ archives:
 checksum:
   name_template: checksums.txt
 
+dockers:
+  - id: yocache-linux-amd64
+    ids: [yocache]
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: Dockerfile
+    extra_files:
+      - entrypoint.sh
+    image_templates:
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - id: yocache-linux-arm64
+    ids: [yocache]
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile
+    extra_files:
+      - entrypoint.sh
+    image_templates:
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: "{{ .Env.GHCR_IMAGE }}:{{ .Version }}"
+    image_templates:
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-arm64"
+  - name_template: "{{ .Env.GHCR_IMAGE }}:latest"
+    image_templates:
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.GHCR_IMAGE }}:{{ .Version }}-arm64"
+  - name_template: "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}"
+    image_templates:
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-arm64"
+  - name_template: "{{ .Env.DOCKERHUB_IMAGE }}:latest"
+    image_templates:
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-arm64"
+
