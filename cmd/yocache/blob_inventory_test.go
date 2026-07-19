@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 func newTestInventory(t *testing.T) (*blobInventory, *sql.DB) {
@@ -227,6 +229,59 @@ func TestBlobInventoryRetrofit(t *testing.T) {
 	// Dot file skipped.
 	if _, _, _, found := queryBlobRow(t, db, "downloads", ".staging"); found {
 		t.Error(".staging was seeded but should be skipped")
+	}
+}
+
+// TestMigrationBackfillsSstateChecksum confirms migration 0004's backfill
+// UPDATE (pure SQL) agrees with sstateChecksum (Go) on rows that predate the
+// checksum column — the case a fresh-DB test can't exercise, since goose
+// applies every migration in one shot before any row exists to backfill. It
+// stops short of migration 4, seeds rows the way they'd have looked before
+// the column existed, then applies just that migration and checks the result.
+func TestMigrationBackfillsSstateChecksum(t *testing.T) {
+	paths := []string{
+		"37/00/sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst",
+		"37/00/sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst.siginfo",
+		"sstate:curl::8.19.0:r0::14:372038f5e66ef6eaf2d5f847a0f07ace84cd0e69ab59ba61d30993a5bfda910c_patch.tar.zst",
+	}
+
+	db, err := openOperationalDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("openOperationalDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("goose dialect: %v", err)
+	}
+	if err := goose.UpTo(db, "migrations", 3); err != nil {
+		t.Fatalf("UpTo(3): %v", err)
+	}
+
+	for i, p := range paths {
+		if _, err := db.Exec(
+			`INSERT INTO blobs (kind, path, size, added_at, accessed_at) VALUES (?, ?, ?, ?, ?)`,
+			"sstate", p, 100, 1000, 1000+int64(i),
+		); err != nil {
+			t.Fatalf("seed pre-existing row %q: %v", p, err)
+		}
+	}
+
+	if err := goose.UpTo(db, "migrations", 4); err != nil {
+		t.Fatalf("UpTo(4): %v", err)
+	}
+
+	for _, p := range paths {
+		var checksum sql.NullString
+		if err := db.QueryRow(`SELECT checksum FROM blobs WHERE path = ?`, p).Scan(&checksum); err != nil {
+			t.Fatalf("query checksum for %q: %v", p, err)
+		}
+		want := sstateChecksum(p)
+		if !checksum.Valid || checksum.String != want {
+			t.Errorf("backfilled checksum for %q = %+v, want %q", p, checksum, want)
+		}
 	}
 }
 
