@@ -25,10 +25,11 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-// buildReport mirrors the JSON sent by yocache.bbclass. The class POSTs one
+// buildReport mirrors the JSON shape yocache.bbclass used to POST here, one
 // report per event (BuildStarted/BuildCompleted/MetadataEvent), not an
-// end-of-build aggregate, so every report carries the event name plus a
-// stringified dump of the raw bitbake event.
+// end-of-build aggregate — every report carried the event name plus a
+// stringified dump of the raw bitbake event. The bbclass no longer sends
+// this (see the handler comment below); kept in case it's reinstated.
 //
 // Type and Metadata are only populated for bb.event.MetadataEvent. Metadata
 // is left raw because its shape depends on the MetadataEvent subtype:
@@ -281,9 +282,10 @@ func main() {
 	he := newHashEquiv(store, log, ledger)
 	mux.HandleFunc("/hashequiv", he.handle)
 
-	// Build telemetry sink. yocache.bbclass POSTs one JSON report per
-	// bitbake event. We just decode and log it for now — no persistence
-	// yet; this proves the round trip and shows the real payload shape.
+	// Build telemetry sink. Nothing on the client side calls this anymore —
+	// yocache.bbclass dropped its per-event report/POST (it never persisted
+	// anything and the events fed it are gone). Kept for a possible future
+	// reinstatement; still just decodes and logs, no persistence.
 	mux.HandleFunc("POST /api/build-report", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		if err != nil {

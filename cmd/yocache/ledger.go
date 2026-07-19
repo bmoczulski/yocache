@@ -8,9 +8,7 @@ import (
 )
 
 // Ledger is an append-only JSONL audit log of important server-side state
-// changes. It is distinct from the build telemetry log (YOCACHE_LOG on the
-// bbclass side): that records what bitbake events happened during a build; this
-// records what the server did to its own stored state.
+// changes — what the server did to its own stored state.
 //
 // One JSON object per line; parseable with jq or DuckDB's read_ndjson(). New
 // entry types are added by defining a new details struct and a new Record*

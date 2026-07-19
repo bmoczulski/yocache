@@ -17,8 +17,6 @@ repos:
 local_conf_header:
   yocache: |
     YOCACHE_URL = "http://localhost:6768"
-    YOCACHE_SKIP_POST = "1"
-    YOCACHE_LOG_LIMIT = "0"
 
     # Point bitbake's hash-equivalence at yocache, spoken over WebSocket on the
     # same port. Must live here (cooker reads BB_HASHSERVE), not in the bbclass.
@@ -26,13 +24,6 @@ local_conf_header:
     # warning. localhost works because kas runs with --network=host.
     BB_HASHSERVE = "ws://localhost:6768/hashequiv"
 
-    # "toaster" is necessary for Yocache to harvest MissedSstate events
-    INHERIT += "toaster"
-
     # The juice!
     INHERIT += "yocache"
-
-    # Toaster server suggests it (and I like it too)
-    INHERIT += "buildhistory"
-    BUILDHISTORY_COMMIT = "1"
 

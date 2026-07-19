@@ -18,9 +18,6 @@ opt-outs and tuning knobs with working defaults.
 | `YOCACHE_SKIP_UPLOAD` | `0` | Dry run: log what *would* be uploaded, but don't send anything. |
 | `YOCACHE_BLOCK_RECIPES` | *(empty)* | Space-separated recipe names never uploaded from this build — the client-side counterpart of the server's `--block-recipe`. |
 | `YOCACHE_UPLOAD_THREADS` | `4` | How many artifacts are uploaded in parallel. |
-| `YOCACHE_LOG` | `${TMPDIR}/yocache-events.jsonl` | Local JSONL log of the build events the layer observes. Set empty to disable. |
-| `YOCACHE_LOG_LIMIT` | `10` | Cap per event type in `YOCACHE_LOG`, keeping it skimmable; `0` = unlimited. Doesn't affect what's reported to the server. |
-| `YOCACHE_SKIP_POST` | `0` | Don't send build telemetry to the server (events still go to `YOCACHE_LOG`). |
 
 ## Common setups
 

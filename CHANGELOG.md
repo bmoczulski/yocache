@@ -5,6 +5,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Removed
+- `yocache.bbclass` no longer POSTs a per-event build report to the server,
+  nor logs it locally — the server never persisted any of it (every payload
+  was decoded and discarded), so it was pure overhead: hundreds to thousands
+  of synchronous requests per build for no benefit. `INHERIT += "toaster"` and
+  `INHERIT += "buildhistory"` are also dropped from the recommended setup,
+  since their only purpose here was unlocking two of the now-removed events
+  (`MissedSstate`, `TaskArtifacts`). Removed variables: `YOCACHE_SKIP_POST`,
+  `YOCACHE_REPORT_ENDPOINT`, `YOCACHE_LOG`, `YOCACHE_LOG_LIMIT`,
+  `YOCACHE_EVENTS`, `YOCACHE_METADATA_TYPES`. The server's
+  `POST /api/build-report` endpoint stays, unused, for a possible future
+  reinstatement with a real consumer. Mirror wiring and artifact upload are
+  unaffected.
+
 ### Added
 - Hash-equivalence now dedups across different taskhashes that produce the
   same task output (cross-output equivalence): a `report` whose outhash

@@ -55,13 +55,6 @@ local_conf_header:
     # releases (whose bitbake has no ws:// client), same line either way
     # BB_HASHSERVE = "${@'ws://yourcache.local:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'yourcache.local:6767'}"
 
-    # "toaster" is necessary for YoCache to harvest MissedSstate events
-    INHERIT += "toaster"
-
-    # Toaster server suggests to enable build history with commits
-    INHERIT += "buildhistory"
-    BUILDHISTORY_COMMIT = "1"
-
     # The juice!
     INHERIT += "yocache"
 ```

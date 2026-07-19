@@ -41,23 +41,26 @@ WebSocket on port 6768**:
     the gap this project bridges.
 - **Build-side layer** — [meta-yocache/](meta-yocache/), enabled with
   `INHERIT += "yocache"`. Two jobs:
-  - [classes/yocache.bbclass](meta-yocache/classes/yocache.bbclass) subscribes to
-    a curated set of bitbake events and POSTs one JSON payload per event to
-    `/api/build-report` (also appended to a JSONL log, `YOCACHE_LOG`). It also
-    wires the mirrors: it prepends `PREMIRRORS` and `SSTATE_MIRRORS` from
-    `YOCACHE_URL` (see the mirror `.inc` files —
+  - [classes/yocache.bbclass](meta-yocache/classes/yocache.bbclass) wires the
+    mirrors: it prepends `PREMIRRORS` and `SSTATE_MIRRORS` from `YOCACHE_URL`
+    (see the mirror `.inc` files —
     [yocache-mirrors-new.inc](meta-yocache/classes/yocache-mirrors-new.inc) and
-    the compat variant — chosen by the running bitbake's capabilities).
+    the compat variant — chosen by the running bitbake's capabilities), and
+    manages the uploader's lifecycle (`yocache_build_lifecycle`, on
+    `BuildStarted`/`BuildCompleted`), including the end-of-build "yocache
+    summary" line sourced from `GET /api/build-stats`.
   - [lib/yocache/uploader.py](meta-yocache/lib/yocache/uploader.py) is a
     cooker-resident uploader thread. `SSTATEPOSTCREATEFUNCS` /
     `do_fetch[postfuncs]` hooks notify it over a unix socket, and it `PUT`s each
     blob to the server. See [notes/sstate-upload-hook.md](notes/sstate-upload-hook.md).
 
-The bbclass header comment documents exactly which events carry cache signal and
-why others are excluded, and how build provenance (hostname/IP/machine-id/git
-identity) is gathered out-of-band — preserve that rationale when editing. If you
-change the report shape on one side, change the mirroring `buildReport` struct on
-the other.
+  There used to be a third job — POSTing one JSON payload per bitbake event to
+  `POST /api/build-report` — removed because the server never persisted any of
+  it (see the handler's comment in [main.go](cmd/yocache/main.go)) and two of
+  the events it fed only fired with `INHERIT += "toaster"`, which is why that
+  used to be part of the recommended setup and no longer is. The server
+  endpoint and the `buildReport` struct are kept in case this is reinstated
+  with a real consumer.
 
 ## Storage & persistence
 
@@ -100,8 +103,8 @@ locations — one root, one thing to mount/back up/point a Docker volume at.
   the **access log** (`<data-dir>/yocache.access.jsonl`) records
   `artifact.fetched` / `artifact.missed`. Both are drained by a dedicated
   goroutine so a slow/full log never stalls a request.
-- **DuckDB** is used only for offline analytics over the JSONL logs (the
-  `scripts/` below), not as a live store.
+- **DuckDB** (or `jq`) works well for ad-hoc offline analysis of these JSONL
+  logs; neither is used as a live store.
 
 Planned but not yet built: mDNS/DNS-SD discovery, peer gossip/pull, federation.
 
@@ -196,13 +199,6 @@ taskhash's unihash (mirroring bitbake's own hashserv,
 `get_equivalent_for_outhash`) — so two taskhashes whose actual task output
 matches share a unihash even when their inputs differ, not just identical
 taskhashes across machines.
-
-### Analyzing captured telemetry
-
-```sh
-scripts/summarize-builds.sh [path/to/yocache-events.jsonl]   # one row per build
-scripts/summarize-events.sh [path/to/yocache-events.jsonl]   # counts per event type
-```
 
 `notes/` holds source-verified references (bitbake event catalogue, git mirror
 tarball shapes, build identity, sstate upload hook) backing the design — consult
