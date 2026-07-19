@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.9 - 2026-07-19
+
 ### Removed
 - `yocache.bbclass` no longer POSTs a per-event build report to the server,
   nor logs it locally — the server never persisted any of it (every payload
