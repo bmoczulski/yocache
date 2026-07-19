@@ -300,3 +300,136 @@ func TestLRUPolicyEvictUnknownKind(t *testing.T) {
 		t.Errorf("inventory not empty after eviction: %v", cands)
 	}
 }
+
+// --- Group eviction + hash-equiv cleanup tests ---
+
+func TestLRUPolicyEvictGroupTogether(t *testing.T) {
+	dir := t.TempDir()
+	qt := &quotaTracker{limit: 10000}
+
+	archivePath := "sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst"
+	siginfoPath := archivePath + ".siginfo"
+	writeTestBlob(t, dir, archivePath, make([]byte, 1000))
+	writeTestBlob(t, dir, siginfoPath, make([]byte, 20))
+
+	p, inv := newTestLRUPolicy(t, dir, qt)
+	// The siginfo is much colder than the archive — under plain per-row LRU
+	// it alone would be picked first, orphaning the archive. Grouped
+	// eviction must take both together, in one pass, for a small ask.
+	insertBlobAt(t, inv.db, "sstate", siginfoPath, 20, 50)
+	insertBlobAt(t, inv.db, "sstate", archivePath, 1000, 500)
+	qt.used.Store(1020)
+
+	freed, err := p.Evict(10)
+	if err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	if freed != 1020 {
+		t.Errorf("freed = %d, want 1020 (both siblings evicted together)", freed)
+	}
+	if _, err := os.Stat(filepath.Join(dir, archivePath)); !os.IsNotExist(err) {
+		t.Error("archive still on disk — group eviction left a sibling behind")
+	}
+	if _, err := os.Stat(filepath.Join(dir, siginfoPath)); !os.IsNotExist(err) {
+		t.Error("siginfo still on disk")
+	}
+}
+
+func TestLRUPolicyEvictCleansUpHashEquiv(t *testing.T) {
+	dir := t.TempDir()
+	qt := &quotaTracker{limit: 10000}
+	inv, db := newTestInventory(t)
+	hstore := &hashEquivStore{db: db}
+
+	archivePath := "sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst"
+	checksum := sstateChecksum(archivePath)
+	writeTestBlob(t, dir, archivePath, make([]byte, 100))
+	insertBlobAt(t, db, "sstate", archivePath, 100, 100)
+	qt.used.Store(100)
+
+	if _, err := hstore.insertUnihash("m", "task1", checksum); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+
+	p := &LRUPolicy{
+		inventory: inv,
+		stores:    map[string]string{"sstate": dir},
+		quota:     qt,
+		ledger:    nil,
+		hashEquiv: hstore,
+		log:       slog.Default(),
+		kind:      "sstate",
+	}
+
+	if _, err := p.Evict(50); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+
+	if _, ok, _ := hstore.getEquivalent("m", "task1"); ok {
+		t.Error("hash-equiv entry survived eviction of its backing blob")
+	}
+}
+
+// TestLRUPolicyEvictPartialFailureLeavesGroupAndHashEquivIntact makes one
+// sibling in a group undeletable (a non-empty directory in its place, so
+// os.Remove fails with a real error, not ErrNotExist) and confirms the
+// group is treated as not-fully-evicted: the removable sibling is still
+// freed individually, but the hash-equiv entry is left alone rather than
+// pointing at a blob that (from bitbake's perspective) may still exist.
+func TestLRUPolicyEvictPartialFailureLeavesGroupAndHashEquivIntact(t *testing.T) {
+	dir := t.TempDir()
+	qt := &quotaTracker{limit: 10000}
+	inv, db := newTestInventory(t)
+	hstore := &hashEquivStore{db: db}
+
+	archivePath := "sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst"
+	siginfoPath := archivePath + ".siginfo"
+	checksum := sstateChecksum(archivePath)
+
+	writeTestBlob(t, dir, siginfoPath, make([]byte, 20))
+	// Stand in for the archive with a non-empty directory: os.Remove on it
+	// fails (ENOTEMPTY), unlike a missing file (ErrNotExist).
+	stuckDir := filepath.Join(dir, archivePath)
+	if err := os.MkdirAll(stuckDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuckDir, "inner"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	insertBlobAt(t, db, "sstate", siginfoPath, 20, 100)
+	insertBlobAt(t, db, "sstate", archivePath, 1000, 100)
+	qt.used.Store(1020)
+
+	if _, err := hstore.insertUnihash("m", "task1", checksum); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+
+	p := &LRUPolicy{
+		inventory: inv,
+		stores:    map[string]string{"sstate": dir},
+		quota:     qt,
+		ledger:    nil,
+		hashEquiv: hstore,
+		log:       slog.Default(),
+		kind:      "sstate",
+	}
+
+	freed, err := p.Evict(2000)
+	if err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	if freed != 20 {
+		t.Errorf("freed = %d, want 20 (only the removable sibling)", freed)
+	}
+	if qt.Used() != 1000 {
+		t.Errorf("quota used = %d, want 1000 (only siginfo released)", qt.Used())
+	}
+	if _, ok, _ := hstore.getEquivalent("m", "task1"); !ok {
+		t.Error("hash-equiv entry deleted even though a sibling failed to be removed")
+	}
+	cands, _ := inv.LRUCandidatesByKind("sstate", 10)
+	if len(cands) != 1 || cands[0].Path != archivePath {
+		t.Errorf("inventory after partial eviction = %v, want [%s] still present", cands, archivePath)
+	}
+}

@@ -154,6 +154,90 @@ func (b *blobInventory) LRUCandidatesByKind(kind string, limit int) ([]blobRecor
 	return scanBlobRecords(rows)
 }
 
+// blobGroup is a set of blob rows that must be evicted together: for sstate,
+// every file sharing a content checksum (a task's archive plus its
+// .siginfo/.sig sidecars); for downloads (no checksum), a singleton of just
+// itself. Evicting only part of a group would either strand a sidecar with
+// no archive behind it, or — worse — drop the equivalence entry for an
+// archive that's still perfectly cached, just because its colder sidecar
+// happened to be the one picked by plain per-row LRU.
+type blobGroup struct {
+	Kind    string
+	Members []blobRecord
+	Size    int64
+}
+
+// LRUGroupCandidates is LRUCandidates, but each result is a whole eviction
+// group rather than a single row. Groups are ordered by the *most* recently
+// accessed member, so a rarely-touched sidecar never drags a still-hot
+// archive out of the cache early.
+func (b *blobInventory) LRUGroupCandidates(limit int) ([]blobGroup, error) {
+	rows, err := b.db.Query(`
+		SELECT b.kind, b.path, b.size, g.group_key
+		FROM blobs b
+		JOIN (
+			SELECT kind, COALESCE(checksum, path) AS group_key, MAX(accessed_at) AS eff
+			FROM blobs
+			GROUP BY kind, group_key
+			ORDER BY eff ASC
+			LIMIT ?
+		) g ON b.kind = g.kind AND COALESCE(b.checksum, b.path) = g.group_key
+		ORDER BY g.eff ASC, g.group_key`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("inventory lru group candidates: %w", err)
+	}
+	defer rows.Close()
+	return scanBlobGroups(rows)
+}
+
+// LRUGroupCandidatesByKind is LRUGroupCandidates restricted to a single store
+// kind — the eviction order for a kind-scoped LRU policy (e.g. lru-sstate).
+func (b *blobInventory) LRUGroupCandidatesByKind(kind string, limit int) ([]blobGroup, error) {
+	rows, err := b.db.Query(`
+		SELECT b.kind, b.path, b.size, g.group_key
+		FROM blobs b
+		JOIN (
+			SELECT kind, COALESCE(checksum, path) AS group_key, MAX(accessed_at) AS eff
+			FROM blobs
+			WHERE kind = ?
+			GROUP BY kind, group_key
+			ORDER BY eff ASC
+			LIMIT ?
+		) g ON b.kind = g.kind AND COALESCE(b.checksum, b.path) = g.group_key
+		ORDER BY g.eff ASC, g.group_key`,
+		kind, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("inventory lru group candidates by kind: %w", err)
+	}
+	defer rows.Close()
+	return scanBlobGroups(rows)
+}
+
+// scanBlobGroups buckets rows into groups by (kind, group_key), relying on
+// both queries' ORDER BY to keep a group's members contiguous.
+func scanBlobGroups(rows *sql.Rows) ([]blobGroup, error) {
+	var groups []blobGroup
+	var lastKey string
+	for rows.Next() {
+		var r blobRecord
+		var groupKey string
+		if err := rows.Scan(&r.Kind, &r.Path, &r.Size, &groupKey); err != nil {
+			return nil, fmt.Errorf("inventory lru group scan: %w", err)
+		}
+		if len(groups) == 0 || groups[len(groups)-1].Kind != r.Kind || groupKey != lastKey {
+			groups = append(groups, blobGroup{Kind: r.Kind})
+			lastKey = groupKey
+		}
+		last := &groups[len(groups)-1]
+		last.Members = append(last.Members, r)
+		last.Size += r.Size
+	}
+	return groups, rows.Err()
+}
+
 func scanBlobRecords(rows *sql.Rows) ([]blobRecord, error) {
 	var out []blobRecord
 	for rows.Next() {

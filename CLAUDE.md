@@ -79,10 +79,17 @@ locations — one root, one thing to mount/back up/point a Docker volume at.
   `<data-dir>/yocache.db` shared by all stores. Schema lives in
   [cmd/yocache/migrations/](cmd/yocache/migrations/) and is applied at startup by
   goose (`//go:embed`). Tables: `unihashes`/`outhashes` (hash-equiv) and `blobs`
-  (per-blob size + `accessed_at`, the source of truth for eviction order).
+  (per-blob size + `accessed_at`, the source of truth for eviction order, plus
+  `checksum` — the sstate content hash an archive shares with its
+  `.siginfo`/`.sig` sidecars, NULL for downloads).
 - **Quota + eviction**: `--quota` (e.g. `500MiB`, `0` = unlimited) caps total
   blob bytes; `--evict lru` (repeatable to chain policies) frees space on demand
-  by removing least-recently-accessed blobs. See
+  by removing least-recently-accessed blobs, always evicting a full sstate
+  group (archive + sidecars, via `blobs.checksum`) as one unit rather than
+  per-file, ordered by whichever member was most recently accessed. Once a
+  group is fully evicted, its hash-equivalence entries are deleted too (see
+  `hashEquivStore.DeleteByUnihash`) — bitbake-style GC anchored to blob
+  presence rather than a separate mark-and-sweep pass. See
   [upload.go](cmd/yocache/upload.go) (`quotaTracker`),
   [eviction.go](cmd/yocache/eviction.go), and
   [blob_inventory.go](cmd/yocache/blob_inventory.go).

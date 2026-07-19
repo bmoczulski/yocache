@@ -198,6 +198,61 @@ func TestBlobInventoryLRUCandidatesByKind(t *testing.T) {
 	}
 }
 
+func TestBlobInventoryLRUGroupCandidatesGroupsSstateSiblings(t *testing.T) {
+	inv, db := newTestInventory(t)
+
+	// An archive and its .siginfo sidecar share one checksum. The siginfo is
+	// old (accessed_at=50) but the archive is much newer (accessed_at=200) —
+	// the group's effective LRU order must follow the most recently accessed
+	// member, not the oldest, so a cold sidecar never drags a hot archive out.
+	insertBlobAt(t, db, "sstate",
+		"37/00/sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst",
+		1000, 200)
+	insertBlobAt(t, db, "sstate",
+		"37/00/sstate:ninja-native::1.13.2:r0::14:37001365f620ee00a3177d608f4c5a428edd973c714942c7fea891040660ba34_patch.tar.zst.siginfo",
+		20, 50)
+	// An unrelated, older singleton group.
+	insertBlobAt(t, db, "sstate",
+		"3a/38/sstate:perl:x86-64-v3-poky-linux:5.42.0:r0:x86-64-v3:14:3a387d44c6d044b39daa846af139bb9f0996e654cff18677c6fac53f03312469_package_qa.tar.zst",
+		2000, 100)
+
+	groups, err := inv.LRUGroupCandidatesByKind("sstate", 10)
+	if err != nil {
+		t.Fatalf("LRUGroupCandidatesByKind: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want 2", len(groups))
+	}
+	// The perl singleton (accessed_at=100) is older than the ninja group's
+	// most-recent member (accessed_at=200), so it's the first eviction candidate.
+	if len(groups[0].Members) != 1 || groups[0].Size != 2000 {
+		t.Errorf("groups[0] = %+v, want a 1-member/2000-byte perl singleton", groups[0])
+	}
+	if len(groups[1].Members) != 2 || groups[1].Size != 1020 {
+		t.Errorf("groups[1] = %+v, want a 2-member/1020-byte ninja group", groups[1])
+	}
+}
+
+func TestBlobInventoryLRUGroupCandidatesDownloadsAreSingletons(t *testing.T) {
+	inv, db := newTestInventory(t)
+
+	insertBlobAt(t, db, "downloads", "a.tar.gz", 10, 100)
+	insertBlobAt(t, db, "downloads", "b.tar.gz", 20, 200)
+
+	groups, err := inv.LRUGroupCandidates(10)
+	if err != nil {
+		t.Fatalf("LRUGroupCandidates: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want 2 (downloads never group with each other)", len(groups))
+	}
+	for _, g := range groups {
+		if len(g.Members) != 1 {
+			t.Errorf("group %+v has %d members, want 1", g, len(g.Members))
+		}
+	}
+}
+
 func TestBlobInventoryRetrofit(t *testing.T) {
 	inv, db := newTestInventory(t)
 	dir := t.TempDir()

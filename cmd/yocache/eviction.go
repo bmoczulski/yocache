@@ -51,18 +51,25 @@ func (m *EvictionManager) TryFree(needed int64) (int64, error) {
 
 // LRUPolicy evicts the least-recently-accessed blobs first. It uses
 // blobInventory as the source of truth for ordering and removes blobs from
-// disk, the quota counter, and the inventory atomically per blob.
+// disk, the quota counter, and the inventory atomically per group (see
+// blobGroup) — never per individual file, so an sstate archive and its
+// .siginfo/.sig sidecars always leave together.
 //
 // If kind is set, eviction is scoped to that store kind only (e.g. "sstate")
 // — blobs of other kinds are never considered, evicted, or touched. This
 // backs the "lru-sstate" policy: sstate accumulates stale, no-longer-needed
 // entries as a project evolves and should be trimmed first, while downloads
 // are a flatter, saturating cost that's worth preserving longer.
+//
+// hashEquiv is nil-safe: when set, a fully-evicted sstate group also drops
+// its unihashes/outhashes rows (see hashEquivStore.DeleteByUnihash), so a
+// hash-equiv answer never outlives the blob it points at.
 type LRUPolicy struct {
 	inventory *blobInventory
 	stores    map[string]string // kind → abs root dir
 	quota     *quotaTracker
 	ledger    *Ledger
+	hashEquiv *hashEquivStore
 	log       *slog.Logger
 	kind      string // empty = all kinds
 }
@@ -74,20 +81,21 @@ func (p *LRUPolicy) Name() string {
 	return "lru-" + p.kind
 }
 
-// Evict removes the oldest blobs (by accessed_at) until freed >= needed or the
-// store is empty. Blobs in the inventory that no longer exist on disk are
-// cleaned up silently — they represent an external delete and don't count
-// toward freed (the space was already returned to the OS).
+// Evict removes the oldest groups (by their most-recently-accessed member)
+// until freed >= needed or the store is empty. Blobs in the inventory that no
+// longer exist on disk are cleaned up silently — they represent an external
+// delete and don't count toward freed (the space was already returned to the
+// OS).
 func (p *LRUPolicy) Evict(needed int64) (int64, error) {
 	const batchSize = 50
 	var freed int64
 	for freed < needed {
-		var cands []blobRecord
+		var cands []blobGroup
 		var err error
 		if p.kind == "" {
-			cands, err = p.inventory.LRUCandidates(batchSize)
+			cands, err = p.inventory.LRUGroupCandidates(batchSize)
 		} else {
-			cands, err = p.inventory.LRUCandidatesByKind(p.kind, batchSize)
+			cands, err = p.inventory.LRUGroupCandidatesByKind(p.kind, batchSize)
 		}
 		if err != nil {
 			return freed, fmt.Errorf("lru evict: %w", err)
@@ -95,39 +103,69 @@ func (p *LRUPolicy) Evict(needed int64) (int64, error) {
 		if len(cands) == 0 {
 			break
 		}
-		for _, r := range cands {
+		for _, g := range cands {
 			if freed >= needed {
 				break
 			}
-			dir, ok := p.stores[r.Kind]
-			if !ok {
-				// Stale inventory entry for a store kind we no longer manage.
-				_ = p.inventory.Remove(r.Kind, r.Path)
-				continue
-			}
-			full := filepath.Join(dir, r.Path)
-			if err := os.Remove(full); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					// File was deleted externally — clean the stale inventory
-					// record but do not count as freed: the OS already reclaimed
-					// the space, and we didn't free it in this run.
-					_ = p.inventory.Remove(r.Kind, r.Path)
-				} else {
-					p.log.Warn("lru evict: remove failed", "path", full, "err", err)
-				}
-				continue
-			}
-			if err := p.inventory.Remove(r.Kind, r.Path); err != nil {
-				p.log.Warn("lru evict: inventory remove failed",
-					"kind", r.Kind, "path", r.Path, "err", err)
-			}
-			p.quota.release(r.Size)
-			p.ledger.RecordArtifactEvicted(r.Kind, r.Path, p.Name(), "")
-			freed += r.Size
+			freed += p.evictGroup(g)
 		}
 		if len(cands) < batchSize {
 			break // fewer than a full batch → store exhausted
 		}
 	}
 	return freed, nil
+}
+
+// evictGroup removes every member of a group as one unit. Only once every
+// member is confirmed gone (removed now, or already gone via an external
+// delete) does it release quota, record ledger entries, and — for sstate —
+// drop the matching hash-equiv rows: a member stranded by a real removal
+// error means the group isn't actually evicted yet, so leaving both the
+// quota accounting and the equivalence entry alone is the safe default,
+// retried on a future pass.
+func (p *LRUPolicy) evictGroup(g blobGroup) int64 {
+	dir, ok := p.stores[g.Kind]
+	if !ok {
+		// Stale inventory entries for a store kind we no longer manage.
+		for _, m := range g.Members {
+			_ = p.inventory.Remove(m.Kind, m.Path)
+		}
+		return 0
+	}
+
+	var freed int64
+	clear := true
+	for _, m := range g.Members {
+		full := filepath.Join(dir, m.Path)
+		if err := os.Remove(full); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				p.log.Warn("lru evict: remove failed", "path", full, "err", err)
+				clear = false
+				continue
+			}
+			// File was deleted externally — clean the stale inventory record
+			// but do not count as freed: the OS already reclaimed the space,
+			// and we didn't free it in this run.
+			if err := p.inventory.Remove(m.Kind, m.Path); err != nil {
+				p.log.Warn("lru evict: inventory remove failed", "kind", m.Kind, "path", m.Path, "err", err)
+			}
+			continue
+		}
+		if err := p.inventory.Remove(m.Kind, m.Path); err != nil {
+			p.log.Warn("lru evict: inventory remove failed", "kind", m.Kind, "path", m.Path, "err", err)
+		}
+		p.quota.release(m.Size)
+		p.ledger.RecordArtifactEvicted(m.Kind, m.Path, p.Name(), "")
+		freed += m.Size
+	}
+
+	if clear && g.Kind == "sstate" && p.hashEquiv != nil && len(g.Members) > 0 {
+		if checksum := sstateChecksum(g.Members[0].Path); checksum != "" {
+			if _, _, err := p.hashEquiv.DeleteByUnihash(checksum); err != nil {
+				p.log.Warn("lru evict: hash-equiv cleanup failed", "checksum", checksum, "err", err)
+			}
+		}
+	}
+
+	return freed
 }

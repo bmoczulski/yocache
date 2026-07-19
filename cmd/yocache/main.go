@@ -195,6 +195,7 @@ func main() {
 				stores:    stores,
 				quota:     qt,
 				ledger:    ledger,
+				hashEquiv: store,
 				log:       log,
 			})
 		case "lru-sstate":
@@ -203,6 +204,7 @@ func main() {
 				stores:    map[string]string{"sstate": sstateDir},
 				quota:     qt,
 				ledger:    ledger,
+				hashEquiv: store,
 				log:       log,
 				kind:      "sstate",
 			})

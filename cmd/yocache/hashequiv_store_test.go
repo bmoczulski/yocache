@@ -90,6 +90,75 @@ func TestOuthashRoundTripAndFirstWriteWins(t *testing.T) {
 	}
 }
 
+func TestDeleteByUnihash(t *testing.T) {
+	s := newTestStore(t)
+
+	// Two taskhashes unified onto the same unihash (cross-output equivalence),
+	// each with its own outhash provenance row.
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash task1: %v", err)
+	}
+	if _, err := s.insertUnihash("m", "task2", "uniA"); err != nil {
+		t.Fatalf("insertUnihash task2: %v", err)
+	}
+	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+		t.Fatalf("insertOuthash task1: %v", err)
+	}
+	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out2", Taskhash: "task2", Unihash: "uniA"}); err != nil {
+		t.Fatalf("insertOuthash task2: %v", err)
+	}
+	// An unrelated taskhash/unihash that must survive.
+	if _, err := s.insertUnihash("m", "task3", "uniB"); err != nil {
+		t.Fatalf("insertUnihash task3: %v", err)
+	}
+	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out3", Taskhash: "task3", Unihash: "uniB"}); err != nil {
+		t.Fatalf("insertOuthash task3: %v", err)
+	}
+
+	unihashRows, outhashRows, err := s.DeleteByUnihash("uniA")
+	if err != nil {
+		t.Fatalf("DeleteByUnihash: %v", err)
+	}
+	if unihashRows != 2 {
+		t.Errorf("unihashRows = %d, want 2", unihashRows)
+	}
+	if outhashRows != 2 {
+		t.Errorf("outhashRows = %d, want 2", outhashRows)
+	}
+
+	if _, ok, _ := s.getEquivalent("m", "task1"); ok {
+		t.Error("task1 unihash survived DeleteByUnihash")
+	}
+	if _, ok, _ := s.getEquivalent("m", "task2"); ok {
+		t.Error("task2 unihash survived DeleteByUnihash")
+	}
+	if _, ok, _ := s.getOuthash("m", "out1"); ok {
+		t.Error("out1 outhash survived DeleteByUnihash")
+	}
+	if _, ok, _ := s.getOuthash("m", "out2"); ok {
+		t.Error("out2 outhash survived DeleteByUnihash")
+	}
+
+	// Unrelated unihash/outhash must survive.
+	if u, ok, _ := s.getEquivalent("m", "task3"); !ok || u != "uniB" {
+		t.Errorf("task3 unihash = %q ok=%v, want uniB/true", u, ok)
+	}
+	if _, ok, _ := s.getOuthash("m", "out3"); !ok {
+		t.Error("out3 outhash should survive DeleteByUnihash")
+	}
+}
+
+func TestDeleteByUnihashNoMatch(t *testing.T) {
+	s := newTestStore(t)
+	unihashRows, outhashRows, err := s.DeleteByUnihash("nonexistent")
+	if err != nil {
+		t.Fatalf("DeleteByUnihash: %v", err)
+	}
+	if unihashRows != 0 || outhashRows != 0 {
+		t.Errorf("DeleteByUnihash on empty store = (%d, %d), want (0, 0)", unihashRows, outhashRows)
+	}
+}
+
 // TestPersistAcrossReopen is the whole point of the change: data written before a
 // restart is still in effect after one.
 func TestPersistAcrossReopen(t *testing.T) {

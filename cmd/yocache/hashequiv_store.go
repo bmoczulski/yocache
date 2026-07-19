@@ -84,6 +84,39 @@ func (s *hashEquivStore) insertUnihash(method, taskhash, unihash string) (string
 	return inEffect, nil
 }
 
+// DeleteByUnihash removes every unihashes/outhashes row tied to unihash.
+// Called when the sstate blob(s) backing that unihash have been fully
+// evicted: an equivalence entry pointing at a blob we no longer have would
+// otherwise cost bitbake a wasted round trip instead of an immediate,
+// correct fallback to its own taskhash.
+func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRows int64, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	// outhashes first, while the unihashes rows it joins against still exist.
+	res, err := tx.Exec(`
+		DELETE FROM outhashes
+		WHERE (method, taskhash) IN (
+			SELECT method, taskhash FROM unihashes WHERE unihash = ?
+		)`, unihash,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	outhashRows, _ = res.RowsAffected()
+
+	res, err = tx.Exec(`DELETE FROM unihashes WHERE unihash = ?`, unihash)
+	if err != nil {
+		return 0, outhashRows, err
+	}
+	unihashRows, _ = res.RowsAffected()
+
+	return unihashRows, outhashRows, tx.Commit()
+}
+
 // unihashExists reports whether any taskhash maps to this unihash (backs
 // exists-stream).
 func (s *hashEquivStore) unihashExists(unihash string) (bool, error) {

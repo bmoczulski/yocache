@@ -13,6 +13,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   every taskhash got its own unihash even when two machines' inputs differed
   but their actual output matched, missing sstate reuse bitbake's reference
   server would have found.
+- LRU eviction now evicts an sstate task's archive together with its
+  `.siginfo`/`.sig` sidecars as one unit, ordered by whichever sibling was
+  most recently accessed — a cold sidecar can no longer get evicted alone
+  and strand (or orphan) its still-cached archive. Once a group is fully
+  evicted, its hash-equivalence entries are deleted too, so a unihash never
+  outlives the blob it points at.
 
 ## v0.1.8 - 2026-07-18
 
