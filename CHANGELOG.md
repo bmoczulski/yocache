@@ -18,6 +18,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `POST /api/build-report` endpoint stays, unused, for a possible future
   reinstatement with a real consumer. Mirror wiring and artifact upload are
   unaffected.
+- `YOCACHE_SKIP_UPLOAD`, the blanket dry-run flag, is gone — it was fully
+  redundant with `YOCACHE_SKIP_UPLOAD_TYPES = "all"`, which already produces
+  the same "log what would be uploaded, send nothing" behavior.
 
 ### Added
 - Hash-equivalence now dedups across different taskhashes that produce the

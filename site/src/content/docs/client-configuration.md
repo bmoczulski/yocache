@@ -15,7 +15,6 @@ opt-outs and tuning knobs with working defaults.
 | `BB_HASHSERVE` | *(unset)* | Optional: use YoCache as the hash-equivalence server. On Yocto ≥ Scarthgap, point it at `ws://yourcache.local:6768/hashequiv`; on older releases (whose bitbake has no `ws://` client) point it at the server's raw-TCP listener instead, `yourcache.local:6767`. Must be set in `local.conf`/`site.conf`. |
 | `YOCACHE_SKIP_FETCH_TYPES` | *(empty)* | Artifact types **not** to fetch from the cache: `sstate`, `downloads`, or `all`. With `all` the build never reads from YoCache but still uploads — a populate-only mode. |
 | `YOCACHE_SKIP_UPLOAD_TYPES` | *(empty)* | Artifact types **not** to upload: `sstate`, `downloads`, or `all`. With `all` the build only consumes the cache, never feeds it. |
-| `YOCACHE_SKIP_UPLOAD` | `0` | Dry run: log what *would* be uploaded, but don't send anything. |
 | `YOCACHE_BLOCK_RECIPES` | *(empty)* | Space-separated recipe names never uploaded from this build — the client-side counterpart of the server's `--block-recipe`. |
 | `YOCACHE_UPLOAD_THREADS` | `4` | How many artifacts are uploaded in parallel. |
 
@@ -32,13 +31,6 @@ on a slow uplink):
 
 ```
 YOCACHE_SKIP_UPLOAD_TYPES = "all"
-```
-
-**Trying YoCache out without touching the server** — see what a build would
-upload, without sending a byte:
-
-```
-YOCACHE_SKIP_UPLOAD = "1"
 ```
 
 For the server-side flags, see

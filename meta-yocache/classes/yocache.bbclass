@@ -194,9 +194,6 @@ python () {
 # NOTE: AF_UNIX paths are capped at ~108 bytes — a very deep TMPDIR can overflow.
 YOCACHE_UPLOAD_SOCK ??= "${TMPDIR}/yocache-upload.sock"
 
-# Dry run: accept notifies and log what *would* be uploaded, but skip the PUT.
-YOCACHE_SKIP_UPLOAD ??= "0"
-
 # Per-type upload opt-out: space-separated list of artifact types to skip.
 # Valid values: "sstate" (or "sstate-cache"), "downloads", "all". Example:
 #   YOCACHE_SKIP_UPLOAD_TYPES = "downloads"   # fetch from cache but don't push DL artifacts
