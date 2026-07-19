@@ -183,9 +183,12 @@ BB_HASHSERVE = "ws://localhost:6768/hashequiv"
 
 The store is **SQLite-backed** (survives restart, which matters — a shifting
 unihash across a restart changes dependent taskhashes and trips bitbake's
-StaleSetSceneTasks). It is still **first-write-wins with no cross-output
-equivalence dedup** yet (a reported `outhash` never unifies two different
-taskhashes); output-based equivalence is a follow-up.
+StaleSetSceneTasks). It does **cross-output equivalence dedup**: a reported
+`outhash` that matches an earlier taskhash's `outhash` unifies onto that
+taskhash's unihash (mirroring bitbake's own hashserv,
+`get_equivalent_for_outhash`) — so two taskhashes whose actual task output
+matches share a unihash even when their inputs differ, not just identical
+taskhashes across machines.
 
 ### Analyzing captured telemetry
 

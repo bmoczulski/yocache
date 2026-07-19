@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- Hash-equivalence now dedups across different taskhashes that produce the
+  same task output (cross-output equivalence): a `report` whose outhash
+  matches an earlier taskhash's outhash unifies onto that taskhash's unihash,
+  mirroring bitbake's own hashserv (`get_equivalent_for_outhash`). Previously
+  every taskhash got its own unihash even when two machines' inputs differed
+  but their actual output matched, missing sstate reuse bitbake's reference
+  server would have found.
+
 ## v0.1.8 - 2026-07-18
 
 ### Added

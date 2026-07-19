@@ -23,11 +23,13 @@ package main
 // modes. Admin/gc/user RPCs and backfill-wait are never issued by a build and are
 // not implemented.
 //
-// This is the thin slice: a SQLite-backed store (hashequiv_store.go) with first-
-// write-wins unihashes and NO cross-output equivalence dedup yet (a reported
-// outhash never unifies two different taskhashes). That already shares unihashes
-// for identical taskhashes across machines, and now survives a restart; output-
-// based equivalence is the next follow-up.
+// This is backed by a SQLite store (hashequiv_store.go): first-write-wins
+// unihashes per (method, taskhash), plus cross-output equivalence — a reported
+// outhash that matches an earlier taskhash's outhash unifies onto that earlier
+// taskhash's unihash, mirroring bitbake's own hashserv
+// (get_equivalent_for_outhash). That covers both identical taskhashes across
+// machines and different taskhashes whose task output happens to match, and
+// survives a restart.
 
 import (
 	"context"
@@ -355,14 +357,27 @@ func (h *hashEquiv) handleReport(c heqTransport, raw json.RawMessage) error {
 	}); err != nil {
 		h.log.Warn("hashequiv: outhash persist failed", "err", err, "method", req.Method)
 	}
-	// Thin slice: no cross-output dedup, so the in-effect unihash is simply the
-	// first one reported for this (method, taskhash). On a write failure, fall
-	// back to the reported unihash so the build still gets an answer (it just
-	// won't be shared with other machines).
-	unihash, err := h.store.insertUnihash(req.Method, req.Taskhash, req.Unihash)
+
+	// Cross-output equivalence: outhashes is first-write-wins per (method,
+	// outhash), so if a lookup now finds a *different* taskhash than ours
+	// sitting on this outhash, that earlier taskhash's outhash arrived first —
+	// its unihash is what should be in effect for us too. Otherwise (no prior
+	// row, or the row is the one we just inserted for our own taskhash) there
+	// is nothing to unify with yet, so fall through to our own reported
+	// unihash.
+	reportUnihash := req.Unihash
+	if rec, ok, err := h.store.getOuthash(req.Method, req.Outhash); err != nil {
+		h.log.Warn("hashequiv: outhash lookup failed", "err", err, "method", req.Method)
+	} else if ok && rec.Taskhash != req.Taskhash {
+		reportUnihash = rec.Unihash
+	}
+
+	// On a write failure, fall back to the reported unihash so the build
+	// still gets an answer (it just won't be shared with other machines).
+	unihash, err := h.store.insertUnihash(req.Method, req.Taskhash, reportUnihash)
 	if err != nil {
 		h.log.Warn("hashequiv: unihash persist failed", "err", err, "method", req.Method)
-		unihash = req.Unihash
+		unihash = reportUnihash
 	}
 	h.log.Info("hashequiv report",
 		"method", req.Method,

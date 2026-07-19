@@ -10,11 +10,13 @@ package main
 //
 // The schema mirrors the subset of bitbake's hashserv tables a build exercises:
 //   - unihashes: (method, taskhash) -> unihash, first-write-wins
-//   - outhashes: (method, outhash)  -> the taskhash/unihash that produced it
-// Semantics are unchanged from the in-memory store — still first-write-wins with
-// NO cross-output equivalence dedup yet. unihashExists is answered from the
-// unihashes table (a unihash "exists" if some taskhash maps to it), so we don't
-// keep a separate set.
+//   - outhashes: (method, outhash)  -> the taskhash/unihash that produced it,
+//     also first-write-wins, which is what makes it usable for cross-output
+//     equivalence: the one surviving row for an outhash is always the oldest
+//     taskhash that produced it, exactly what hashequiv.go's handleReport needs
+//     to unify a later, differently-hashed taskhash onto it.
+// unihashExists is answered from the unihashes table (a unihash "exists" if some
+// taskhash maps to it), so we don't keep a separate set.
 //
 // Concurrency is left to SQLite: WAL mode plus a busy_timeout let the read pool
 // and the single writer coexist without explicit locking, so the Go-side mutex

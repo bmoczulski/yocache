@@ -173,6 +173,60 @@ func TestHeqTCPRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHeqTCPReportCrossOutputEquivalence drives two reports for different
+// taskhashes that happen to produce the same outhash (e.g. a metadata-only
+// recipe change that doesn't affect the task's actual output) and confirms the
+// later taskhash adopts the earlier one's unihash instead of keeping its own —
+// mirroring bitbake's own hashserv get_equivalent_for_outhash.
+func TestHeqTCPReportCrossOutputEquivalence(t *testing.T) {
+	h := newTestHashEquiv(t)
+	addr := startTestHeqTCPServer(t, h)
+	c := dialHeqTCP(t, addr)
+
+	if err := c.sendMessage(map[string]any{"report": map[string]any{
+		"method": "m", "taskhash": "t1", "outhash": "same-out", "unihash": "u1",
+	}}); err != nil {
+		t.Fatalf("sendMessage(report t1): %v", err)
+	}
+	resp, err := c.recvMessage()
+	if err != nil {
+		t.Fatalf("recvMessage(report t1 ack): %v", err)
+	}
+	if got := rawJSONString(t, resp, "unihash"); got != "u1" {
+		t.Errorf("report t1 ack unihash = %q, want u1 (first report, nothing to unify with)", got)
+	}
+
+	// t2 has a different taskhash (different input) but the same outhash
+	// (identical task output) — it should be unified onto t1's unihash, not
+	// keep its own reported "u2".
+	if err := c.sendMessage(map[string]any{"report": map[string]any{
+		"method": "m", "taskhash": "t2", "outhash": "same-out", "unihash": "u2",
+	}}); err != nil {
+		t.Fatalf("sendMessage(report t2): %v", err)
+	}
+	resp, err = c.recvMessage()
+	if err != nil {
+		t.Fatalf("recvMessage(report t2 ack): %v", err)
+	}
+	if got := rawJSONString(t, resp, "unihash"); got != "u1" {
+		t.Errorf("report t2 ack unihash = %q, want u1 (unified with t1's earlier outhash)", got)
+	}
+
+	// A subsequent get for t2 must also return the unified unihash.
+	if err := c.sendMessage(map[string]any{"get": map[string]any{
+		"method": "m", "taskhash": "t2",
+	}}); err != nil {
+		t.Fatalf("sendMessage(get t2): %v", err)
+	}
+	resp, err = c.recvMessage()
+	if err != nil {
+		t.Fatalf("recvMessage(get t2): %v", err)
+	}
+	if got := rawJSONString(t, resp, "unihash"); got != "u1" {
+		t.Errorf("get t2 unihash = %q, want u1", got)
+	}
+}
+
 func TestHeqTCPReportEquivAndPing(t *testing.T) {
 	h := newTestHashEquiv(t)
 	addr := startTestHeqTCPServer(t, h)
