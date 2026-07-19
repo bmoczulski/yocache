@@ -52,19 +52,34 @@ func (b *blobInventory) Upsert(kind, path string, size int64, buildname string, 
 		bs = sql.NullInt64{Int64: buildMS, Valid: true}
 	}
 	_, err := b.db.Exec(`
-		INSERT INTO blobs (kind, path, size, added_at, accessed_at, buildname, build_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO blobs (kind, path, size, added_at, accessed_at, buildname, build_ms, checksum)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (kind, path) DO UPDATE SET
 			size        = excluded.size,
 			accessed_at = excluded.accessed_at,
 			buildname   = excluded.buildname,
-			build_ms    = excluded.build_ms`,
-		kind, path, size, now, now, bn, bs,
+			build_ms    = excluded.build_ms,
+			checksum    = excluded.checksum`,
+		kind, path, size, now, now, bn, bs, groupChecksum(kind, path),
 	)
 	if err != nil {
 		return fmt.Errorf("inventory upsert %s/%s: %w", kind, path, err)
 	}
 	return nil
+}
+
+// groupChecksum returns the group key a blob shares with its siblings:
+// sstateChecksum(path) for sstate — the same content hash a task's archive
+// and its .siginfo/.sig sidecars all carry — or NULL for downloads, which
+// have no siblings to group with.
+func groupChecksum(kind, path string) sql.NullString {
+	if kind != "sstate" {
+		return sql.NullString{}
+	}
+	if c := sstateChecksum(path); c != "" {
+		return sql.NullString{String: c, Valid: true}
+	}
+	return sql.NullString{}
 }
 
 // BuildMS returns the build_ms recorded for a blob at upload time (sstate
@@ -217,10 +232,10 @@ func (b *blobInventory) retrofitStore(kind, dir string) error {
 		}
 		mtime := fi.ModTime().Unix()
 		_, execErr := b.db.Exec(`
-			INSERT INTO blobs (kind, path, size, added_at, accessed_at)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO blobs (kind, path, size, added_at, accessed_at, checksum)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, path) DO NOTHING`,
-			kind, rel, fi.Size(), mtime, mtime,
+			kind, rel, fi.Size(), mtime, mtime, groupChecksum(kind, rel),
 		)
 		return execErr
 	})

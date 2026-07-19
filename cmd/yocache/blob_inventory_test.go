@@ -24,12 +24,15 @@ func newTestInventory(t *testing.T) (*blobInventory, *sql.DB) {
 }
 
 // insertBlobAt inserts a blob with explicit timestamps, bypassing Upsert's
-// time.Now() so tests can control LRU ordering without sleeping.
+// time.Now() so tests can control LRU ordering without sleeping. checksum is
+// still derived the way Upsert derives it, so sstate rows that share a real
+// checksum (e.g. an archive plus its .siginfo sidecar) dedup the same way
+// they would via the real write path.
 func insertBlobAt(t *testing.T, db *sql.DB, kind, path string, size, ts int64) {
 	t.Helper()
 	_, err := db.Exec(
-		`INSERT INTO blobs (kind, path, size, added_at, accessed_at) VALUES (?, ?, ?, ?, ?)`,
-		kind, path, size, ts, ts,
+		`INSERT INTO blobs (kind, path, size, added_at, accessed_at, checksum) VALUES (?, ?, ?, ?, ?, ?)`,
+		kind, path, size, ts, ts, groupChecksum(kind, path),
 	)
 	if err != nil {
 		t.Fatalf("insertBlobAt(%s/%s): %v", kind, path, err)

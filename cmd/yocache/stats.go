@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,36 +25,24 @@ func (b *blobInventory) CategoryStats(kind string) (files, sizeBytes int64, err 
 
 // SstateStats returns sstate's file count, cumulative size in bytes, and the
 // deduplicated recipe count: a cached task output is stored as a .tar.zst plus
-// a .siginfo sidecar that share the same content hash in their filename, so
-// they count as one recipe rather than two files.
+// a .siginfo sidecar that share the same checksum (see blobs.checksum, backed
+// by sstateChecksum), so they count as one recipe rather than two files.
 func (b *blobInventory) SstateStats() (files, recipes, sizeBytes int64, err error) {
-	rows, err := b.db.Query(`SELECT path, size FROM blobs WHERE kind = 'sstate'`)
+	err = b.db.QueryRow(
+		`SELECT COUNT(*), COUNT(DISTINCT checksum), COALESCE(SUM(size), 0) FROM blobs WHERE kind = 'sstate'`,
+	).Scan(&files, &recipes, &sizeBytes)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("inventory sstate stats: %w", err)
 	}
-	defer rows.Close()
-
-	seen := make(map[string]struct{})
-	for rows.Next() {
-		var path string
-		var size int64
-		if err := rows.Scan(&path, &size); err != nil {
-			return 0, 0, 0, fmt.Errorf("inventory sstate stats scan: %w", err)
-		}
-		files++
-		sizeBytes += size
-		seen[sstateChecksum(path)] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, 0, fmt.Errorf("inventory sstate stats: %w", err)
-	}
-	return files, int64(len(seen)), sizeBytes, nil
+	return files, recipes, sizeBytes, nil
 }
 
 // sstateChecksum extracts the content-hash field from a stored sstate blob
 // path, e.g. "37/00/sstate:ninja-native::1.13.2:r0::14:37001365…ba34_patch.tar.zst.siginfo"
-// -> "37001365…ba34". That hash is the dedup key SstateStats uses to count a
-// task's .tar.zst and its .siginfo sidecar as a single recipe.
+// -> "37001365…ba34". Computed once at write time into blobs.checksum (see
+// groupChecksum in blob_inventory.go) — it's both the dedup key SstateStats
+// uses to count a task's .tar.zst and its .siginfo sidecar as a single
+// recipe, and the group key eviction uses to evict them together.
 func sstateChecksum(path string) string {
 	base := filepath.Base(path)
 	if i := strings.LastIndex(base, ":"); i != -1 {
@@ -82,37 +69,29 @@ func (b *blobInventory) BuildUploadStats(buildname string) (dlFiles, dlBytes, ss
 		return 0, 0, 0, 0, 0, 0, err
 	}
 
-	rows, err := b.db.Query(
-		`SELECT path, size, build_ms FROM blobs WHERE kind = 'sstate' AND buildname = ?`, buildname,
-	)
+	err = b.db.QueryRow(`
+		SELECT COUNT(*), COUNT(DISTINCT checksum), COALESCE(SUM(size), 0)
+		FROM blobs WHERE kind = 'sstate' AND buildname = ?`, buildname,
+	).Scan(&ssFiles, &ssRecipes, &ssBytes)
 	if err != nil {
 		return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s: %w", buildname, err)
 	}
-	defer rows.Close()
 
-	seen := make(map[string]struct{})
-	for rows.Next() {
-		var path string
-		var size int64
-		var ms sql.NullInt64
-		if err := rows.Scan(&path, &size, &ms); err != nil {
-			return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s scan: %w", buildname, err)
-		}
-		ssFiles++
-		ssBytes += size
-		if csum := sstateChecksum(path); csum != "" {
-			if _, dup := seen[csum]; !dup {
-				seen[csum] = struct{}{}
-				if ms.Valid {
-					ssMS += ms.Int64
-				}
-			}
-		}
+	// build_ms is set once per checksum (the archive's own upload), and NULL
+	// on sidecars — MAX per checksum group picks it up regardless of which
+	// member carries it, then the outer SUM counts each checksum once.
+	err = b.db.QueryRow(`
+		SELECT COALESCE(SUM(build_ms), 0) FROM (
+			SELECT MAX(build_ms) AS build_ms
+			FROM blobs WHERE kind = 'sstate' AND buildname = ?
+			GROUP BY checksum
+		)`, buildname,
+	).Scan(&ssMS)
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s ms: %w", buildname, err)
 	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, 0, 0, 0, 0, fmt.Errorf("inventory build upload stats %s: %w", buildname, err)
-	}
-	return dlFiles, dlBytes, ssFiles, int64(len(seen)), ssBytes, ssMS, nil
+
+	return dlFiles, dlBytes, ssFiles, ssRecipes, ssBytes, ssMS, nil
 }
 
 func (b *blobInventory) buildUploadCategoryStats(buildname, kind string) (files, sizeBytes int64, err error) {
