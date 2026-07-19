@@ -30,18 +30,14 @@ import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 		bitbake pushes artifacts to the cache the moment they're created. No rsync
 		jobs, no cron, no "who refreshes the mirror" rota.
 	</Card>
-	<Card title="One line of config" icon="pencil">
-		Add the layer, set the cache URL, and `INHERIT += "yocache"` — mirrors are
-		wired up for you on every build.
+	<Card title="Minimal setup" icon="pencil">
+		Start the server, add the layer, set `YOCACHE_URL`, and `INHERIT += "yocache"`
+		— mirrors are wired up for you on every build.
 	</Card>
-	<Card title="Single static binary" icon="laptop">
+	<Card title="Single static binary or container" icon="laptop">
 		The server is one self-contained executable with zero runtime
 		dependencies. Drop it on any Linux or macOS box and it's running.
-	</Card>
-	<Card title="Ships as a container too" icon="server">
-		Multi-arch images published on every release to both GHCR and Docker
-		Hub, non-root by default. `docker run` and you're done — see
-		[Running with Docker](../docker/).
+		Docker images are available too — see [Running with Docker](../docker/).
 	</Card>
 	<Card title="Hash equivalence built in" icon="puzzle">
 		A persistent hash-equivalence server ships inside the same binary — fewer
@@ -50,6 +46,10 @@ import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 	<Card title="Set-and-forget storage" icon="setting">
 		Give it a size quota and it keeps itself tidy, evicting the
 		least-recently-used artifacts. Concurrent uploads are safe by design.
+	</Card>
+	<Card title="Be the build hero" icon="sun">
+		Got YoCache running? Invite the team. Every teammate who joins the cache
+		makes everyone else's builds faster — share the win.
 	</Card>
 </CardGrid>
 
@@ -72,7 +72,7 @@ import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
    INHERIT += "yocache"
    ```
 
-3. **Build.** The first build fills the cache; every build after that — on
-   any machine — pulls from it and tops it up automatically.
+3. **Run bitbake.** The first build fills the cache; every build after that —
+   on any machine — pulls from it and tops it up automatically.
 
 </Steps>
