@@ -15,7 +15,7 @@ opt-outs and tuning knobs with working defaults.
 | `BB_HASHSERVE` | *(unset)* | Optional: use YoCache as the hash-equivalence server. On Yocto ≥ Scarthgap, point it at `ws://yourcache.local:6768/hashequiv`; on older releases (whose bitbake has no `ws://` client) point it at the server's raw-TCP listener instead, `yourcache.local:6767`. Must be set in `local.conf`/`site.conf`. |
 | `YOCACHE_SKIP_FETCH_TYPES` | *(empty)* | Artifact types **not** to fetch from the cache: `sstate`, `downloads`, or `all`. With `all` the build never reads from YoCache but still uploads — a populate-only mode. |
 | `YOCACHE_SKIP_UPLOAD_TYPES` | *(empty)* | Artifact types **not** to upload: `sstate`, `downloads`, or `all`. With `all` the build only consumes the cache, never feeds it. |
-| `YOCACHE_BLOCK_RECIPES` | *(empty)* | Space-separated recipe names never uploaded from this build — the client-side counterpart of the server's `--block-recipe`. |
+| `YOCACHE_BLOCK_RECIPES` | *(empty)* | Space-separated recipe names never uploaded from this build — the client-side counterpart of the server's `--block-recipe`. Propagates downstream: a recipe that transitively `DEPENDS` on a blocked recipe is skipped too (logged as `depends on blocked recipe(s): ...`), since its own sstate can inherit a blocked recipe's non-determinism even when its taskhash doesn't show it. |
 | `YOCACHE_UPLOAD_THREADS` | `4` | How many artifacts are uploaded in parallel. |
 
 ## Common setups

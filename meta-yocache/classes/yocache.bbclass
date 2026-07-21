@@ -214,7 +214,28 @@ YOCACHE_SKIP_FETCH_TYPES ??= ""
 # A build-side complement to the server's --block-recipe flag: recipes known to
 # produce non-reproducible or broken artifacts are silently skipped before any
 # socket or network I/O rather than being rejected after the fact at the server.
+#
+# Blocking propagates downstream: a recipe that transitively DEPENDS on a
+# blocked recipe is skipped too, named as "depends on blocked recipe(s)" in
+# the warning, not "blocked recipe" — a consumer of tainted output can be
+# just as unsafe to share as the tainted recipe itself, even though its own
+# taskhash never reflects that (see _yocache_blocked_by below).
 YOCACHE_BLOCK_RECIPES ??= ""
+
+# Returns (own_pn_if_directly_blocked, sorted list of blocked upstream PNs
+# this task transitively depends on) so a hook can log exactly why it's
+# skipping. BB_TASKDEPDATA is bitbake's own recursive dependency closure for
+# the task currently executing — set by bitbake-worker for every task (see
+# RunQueue.build_taskdepdata in bitbake/lib/bb/runqueue.py) — so no separate
+# graph walk is needed here, just a scan of a dict bitbake already built.
+def _yocache_blocked_by(d, blocked):
+    if not blocked:
+        return None, []
+    pn = d.getVar("PN") or ""
+    own = pn if pn in blocked else None
+    taskdepdata = d.getVar("BB_TASKDEPDATA", False) or {}
+    upstream = sorted({td[0] for td in taskdepdata.values() if td[0] in blocked and td[0] != pn})
+    return own, upstream
 
 # Size of the cooker uploader's PUT worker pool.
 YOCACHE_UPLOAD_THREADS ??= "4"
@@ -419,9 +440,14 @@ python yocache_notify_sstate () {
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
     try:
-        _blocked = (d.getVar("YOCACHE_BLOCK_RECIPES") or "").split()
-        if _blocked and (d.getVar("PN") or "") in _blocked:
-            bb.note("yocache: skipping sstate upload for blocked recipe %s" % d.getVar("PN"))
+        _blocked = set((d.getVar("YOCACHE_BLOCK_RECIPES") or "").split())
+        _own, _upstream = _yocache_blocked_by(d, _blocked)
+        if _own:
+            bb.warn("yocache: skipping sstate upload for blocked recipe %s" % _own)
+            return
+        if _upstream:
+            bb.warn("yocache: skipping sstate upload for %s — depends on blocked recipe(s): %s"
+                    % (d.getVar("PN"), ", ".join(_upstream)))
             return
         from yocache import uploader
         path = d.getVar("SSTATE_PKG")
@@ -501,6 +527,10 @@ python yocache_notify_sstate () {
 # use [flag] syntax which is stable across all bitbake versions.
 SSTATEPOSTCREATEFUNCS[vardepvalueexclude] .= "| yocache_notify_sstate"
 sstate_package[vardepsexclude] += "yocache_notify_sstate"
+# BB_TASKDEPDATA (read by _yocache_blocked_by, called above) is bitbake's
+# own per-invocation dependency-closure snapshot, not recipe metadata — it
+# must never enter a task's signature, same reasoning as the excludes above.
+yocache_notify_sstate[vardepsexclude] += "BB_TASKDEPDATA"
 
 # After a recipe's do_fetch, hand every fetched artifact to the uploader:
 # the mirror tarballs (git2_*/gitshallow_*) and the plain SRC_URI downloads.
@@ -512,9 +542,14 @@ python yocache_notify_dl () {
     if _yclib and _yclib not in sys.path:
         sys.path.insert(0, _yclib)
     try:
-        _blocked = (d.getVar("YOCACHE_BLOCK_RECIPES") or "").split()
-        if _blocked and (d.getVar("PN") or "") in _blocked:
-            bb.note("yocache: skipping downloads upload for blocked recipe %s" % d.getVar("PN"))
+        _blocked = set((d.getVar("YOCACHE_BLOCK_RECIPES") or "").split())
+        _own, _upstream = _yocache_blocked_by(d, _blocked)
+        if _own:
+            bb.warn("yocache: skipping downloads upload for blocked recipe %s" % _own)
+            return
+        if _upstream:
+            bb.warn("yocache: skipping downloads upload for %s — depends on blocked recipe(s): %s"
+                    % (d.getVar("PN"), ", ".join(_upstream)))
             return
         from bb import fetch2
         from yocache import uploader
@@ -582,3 +617,7 @@ do_fetch[postfuncs] += "yocache_notify_dl"
 # unihashes that depend on them). '+=' is fine here — unlike SSTATEPOSTCREATEFUNCS
 # nothing hard-resets the do_fetch[postfuncs] flag after this class.
 do_fetch[vardepsexclude] += "yocache_notify_dl"
+# Same reasoning as yocache_notify_sstate's exclude above: BB_TASKDEPDATA
+# (read by _yocache_blocked_by, called above) must never enter do_fetch's
+# signature.
+yocache_notify_dl[vardepsexclude] += "BB_TASKDEPDATA"

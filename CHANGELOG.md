@@ -5,6 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `YOCACHE_BLOCK_RECIPES` now propagates downstream: a recipe that
+  transitively `DEPENDS` on a blocked recipe is skipped too, using
+  `BB_TASKDEPDATA` (bitbake's own recursive per-task dependency closure) to
+  find it — no separate graph walk needed. A blocked recipe's own build
+  output can be non-deterministic in ways its taskhash never reflects, so a
+  downstream consumer's sstate can silently inherit that same problem even
+  though its own taskhash looks stable across machines. Both the directly
+  blocked recipe and any downstream recipe skipped because of it now log a
+  `bb.warn` (previously `bb.note` for the direct case) naming the
+  responsible upstream recipe(s).
+
 ## v0.1.9 - 2026-07-19
 
 ### Removed
