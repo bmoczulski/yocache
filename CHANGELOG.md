@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.10 - 2026-08-08
+
 ### Changed
 - Documentation site moves from `bmoczulski.github.io/yocache` to
   [yocache.dev](https://yocache.dev). Old GitHub Pages URLs redirect
