@@ -4,12 +4,7 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
-	// TODO: replace with the real domain once purchased and drop the SITE_URL/
-	// SITE_BASE env overrides below (used for now to publish under GitHub
-	// Pages' project-site path, https://bmoczulski.github.io/yocache/); the
-	// site is designed to be served at the domain root (no `base` path).
-	site: process.env.SITE_URL ?? 'https://yocache.example.com',
-	base: process.env.SITE_BASE ?? '/',
+	site: process.env.SITE_URL ?? 'https://yocache.dev',
 	integrations: [
 		starlight({
 			title: 'YoCache',

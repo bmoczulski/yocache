@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed
+- Documentation site moves from `bmoczulski.github.io/yocache` to
+  [yocache.dev](https://yocache.dev). Old GitHub Pages URLs redirect
+  automatically.
+
 ### Added
 - `YOCACHE_BLOCK_RECIPES` now propagates downstream: a recipe that
   transitively `DEPENDS` on a blocked recipe is skipped too, using

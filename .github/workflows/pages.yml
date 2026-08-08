@@ -27,8 +27,7 @@ jobs:
       - run: npm run build
         working-directory: site
         env:
-          SITE_URL: https://bmoczulski.github.io
-          SITE_BASE: /yocache
+          SITE_URL: https://yocache.dev
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist
