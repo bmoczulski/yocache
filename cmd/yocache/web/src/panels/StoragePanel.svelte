@@ -1,8 +1,7 @@
 <script lang="ts">
-  import type { EChartsOption } from 'echarts';
   import type { Stats } from '../lib/api';
   import { humanBytes, humanCount } from '../lib/format';
-  import EChart from '../lib/EChart.svelte';
+  import EChart, { type EChartOption } from '../lib/EChart.svelte';
 
   type Props = { stats: Stats };
   let { stats }: Props = $props();
@@ -10,7 +9,7 @@
   // Hash-equiv rows have no byte figure on the server (they're a SQLite table,
   // not on-disk blobs) — the pie shows the two blob categories, and the
   // hash-equiv panel below reports its row counts instead.
-  const pieOption: EChartsOption = $derived({
+  const pieOption: EChartOption = $derived({
     tooltip: {
       trigger: 'item',
       valueFormatter: (v) => humanBytes(Number(v)),

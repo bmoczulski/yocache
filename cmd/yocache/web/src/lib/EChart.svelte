@@ -1,19 +1,44 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import * as echarts from 'echarts';
+  // Tree-shakeable ECharts: import only from echarts/core + the specific
+  // charts, components, and renderers we register with use(). Importing
+  // from the top-level 'echarts' package would side-effect-register every
+  // chart type and pull the full ~800KB library into the bundle.
+  import { init, use, type ECharts, type ComposeOption } from 'echarts/core';
+  import { PieChart, type PieSeriesOption } from 'echarts/charts';
+  import {
+    TooltipComponent,
+    type TooltipComponentOption,
+    LegendComponent,
+    type LegendComponentOption,
+  } from 'echarts/components';
+  import { CanvasRenderer } from 'echarts/renderers';
+  // Self-registering 'dark' theme preset (~3 KB). Not part of echarts/core;
+  // without this import, init(el, 'dark', ...) silently falls back to the
+  // default light-oriented palette — visible on tooltip hover in particular.
+  import 'echarts/theme/dark';
+
+  use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer]);
+
+  // Narrow the option type to just the pieces registered above — better
+  // autocomplete, and a compile error if we ever pass e.g. a bar-chart
+  // series through this component without registering BarChart first.
+  export type EChartOption = ComposeOption<
+    PieSeriesOption | TooltipComponentOption | LegendComponentOption
+  >;
 
   type Props = {
-    option: echarts.EChartsOption;
+    option: EChartOption;
     height?: string;
   };
 
   let { option, height = '360px' }: Props = $props();
 
   let el: HTMLDivElement;
-  let chart: echarts.ECharts | undefined;
+  let chart: ECharts | undefined;
 
   onMount(() => {
-    chart = echarts.init(el, 'dark', { renderer: 'canvas' });
+    chart = init(el, 'dark', { renderer: 'canvas' });
     chart.setOption(option);
     const resize = () => chart?.resize();
     window.addEventListener('resize', resize);
