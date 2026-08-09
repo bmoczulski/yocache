@@ -8,6 +8,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: cmd/yocache/web/package-lock.json
+      - name: Build web dashboard
+        working-directory: cmd/yocache/web
+        run: |
+          npm ci
+          npm run build
       - run: mkdir -p .cache/home .cache/go
       - run: docker build -t yocache-dev .devcontainer
       - run: |
