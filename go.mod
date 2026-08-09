@@ -5,6 +5,8 @@ go 1.26
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/dustin/go-humanize v1.0.1
+	github.com/klauspost/compress v1.19.2
+	github.com/pressly/goose/v3 v3.27.1
 	modernc.org/sqlite v1.50.1
 )
 
@@ -13,7 +15,6 @@ require (
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pressly/goose/v3 v3.27.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

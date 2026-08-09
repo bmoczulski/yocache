@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   hash-equivalence, with a pie chart of blob-store byte share. Fully
   self-contained — no external hosting needed, no runtime dependency on
   Node; the SPA is compiled at build time and embedded via `//go:embed`.
+  Assets go gzip-compressed on the wire — mainly for the UI, but JSON
+  API responses benefit too.
 
 ## v0.1.10 - 2026-08-08
 

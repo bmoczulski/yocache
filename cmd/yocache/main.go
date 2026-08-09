@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"github.com/klauspost/compress/gzhttp"
 )
 
 // buildReport mirrors the JSON shape yocache.bbclass used to POST here, one
@@ -405,11 +406,34 @@ func main() {
 		}
 	})
 
+	// Response compression, allowlisted by Content-Type. Blobs (sstate
+	// tarballs, downloads mirrors, siginfo sidecars) are served as
+	// application/octet-stream by upload.go and are skipped — they're
+	// already compressed and burning CPU to re-compress them would only
+	// waste round-trip time. The SPA assets and JSON responses do
+	// benefit: the ~1 MB dashboard bundle drops to ~360 KB on the wire.
+	gzWrap, err := gzhttp.NewWrapper(
+		gzhttp.ContentTypes([]string{
+			"text/html",
+			"text/css",
+			"text/javascript",        // Go's mime table (RFC 9239) and modern servers
+			"application/javascript", // legacy alias — belt-and-braces
+			"application/json",
+			"image/svg+xml",
+		}),
+		gzhttp.MinSize(1024),
+	)
+	if err != nil {
+		log.Error("gzhttp wrapper init", "err", err)
+		os.Exit(1)
+	}
+	compressed := gzWrap(mux)
+
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Server", "yocache/"+ver.Version)
-			mux.ServeHTTP(w, r)
+			compressed.ServeHTTP(w, r)
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
