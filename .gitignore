@@ -3,6 +3,12 @@
 /dist/
 /bin/
 
+# Web dashboard build artefacts (Svelte + Vite, embedded via //go:embed).
+# Unanchored — the /dist/ above only matches goreleaser's root output.
+# Keeping these ignored keeps goreleaser's clean-tree check green in CI.
+cmd/yocache/web/node_modules/
+cmd/yocache/web/dist/
+
 # Containerised toolchain caches (HOME, GOPATH, build/module cache)
 /.cache/
 
