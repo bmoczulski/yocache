@@ -339,6 +339,12 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	// Web dashboard. `GET /{$}` matches only bare "/", so it doesn't shadow the
+	// blob catch-all below (which still fields /sstate/*, /downloads/*,
+	// /machine/*/...). See cmd/yocache/web.go for the embed and StripPrefix.
+	mux.HandleFunc("GET /{$}", redirectRootToUI)
+	mux.Handle("GET /ui/", webUIHandler())
+
 	// Blob spaces: all methods handled in one place.
 	//
 	// GET / HEAD: both direct (/sstate/<blob>) and identity-prefixed

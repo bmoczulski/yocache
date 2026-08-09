@@ -36,8 +36,16 @@ inspect with `jq` or load into any analytics tool.
 
 `GET /healthz` answers as soon as the server is up, and `GET /api/stats`
 returns a JSON summary of what's in the cache — file counts and sizes for
-downloads and sstate. Handy for dashboards and for confirming the cache is
+downloads and sstate. Handy for scripting and for confirming the cache is
 actually filling up.
+
+## Web dashboard
+
+Point a browser at the server (e.g. `http://yourcache.local:6768/`) to
+see a live dashboard of the same data, plus a pie chart of blob-store
+byte share. It's a Svelte SPA compiled into the binary — no separate web
+host, no configuration flag, no way to disable it in this release. Root
+`/` returns a 301 to `/ui/` where the dashboard lives.
 
 For the build-side knobs, see
 [Client configuration](../client-configuration/).

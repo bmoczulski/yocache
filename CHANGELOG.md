@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- Web dashboard served by the yocache binary at `/ui/` (root `/`
+  redirects there). Shows storage totals for downloads, sstate, and
+  hash-equivalence, with a pie chart of blob-store byte share. Fully
+  self-contained — no external hosting needed, no runtime dependency on
+  Node; the SPA is compiled at build time and embedded via `//go:embed`.
+
 ## v0.1.10 - 2026-08-08
 
 ### Changed

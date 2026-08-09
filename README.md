@@ -25,6 +25,9 @@ Quick check once it's running:
 curl http://yourcache.local:6768/healthz
 ```
 
+Or open `http://yourcache.local:6768/` in a browser — it shows a dashboard
+of what the cache is holding.
+
 ### Add meta-yocache to your kas project
 
 Add YoCache to your kasfile's `repos:` section:

@@ -32,6 +32,10 @@ Quick check once it's running:
 curl http://yourcache.local:6768/healthz
 ```
 
+Or open [http://yourcache.local:6768/](http://yourcache.local:6768/) in a
+browser — the server ships with an embedded dashboard at `/ui/` (root
+redirects there) showing what the cache holds. No extra setup needed.
+
 ## Enable it in your build
 
 ### With kas
@@ -42,7 +46,7 @@ Add YoCache to your kasfile's `repos:` section:
 repos:
   yocache:
     url: https://github.com/bmoczulski/yocache.git
-    refspec: main
+    branch: main
     layers:
       meta-yocache:
 
