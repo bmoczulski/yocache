@@ -36,7 +36,7 @@ Add YoCache to your kasfile's `repos:` section:
 repos:
   yocache:
     url: https://github.com/bmoczulski/yocache.git
-    refspec: main
+    branch: main
     layers:
       meta-yocache:
 
