@@ -155,9 +155,9 @@ to drive real traffic at the server. **Run the Yocto build via `kas-container` o
 the host, not inside the Go devcontainer** — yocache runs separately and they
 talk only over HTTP. See [testdata/yocto/README.md](testdata/yocto/README.md) for
 the full flow. For fast turnaround,
-[notes/cheap-build-targets.md](notes/cheap-build-targets.md) lists small
-`*-native` targets (e.g. `quilt-native`) that fire useful event batches in
-seconds instead of building a whole image.
+[docs/cheap-build-targets.md](docs/cheap-build-targets.md) ranks targets for
+both situations: cheap ones to build from a cold tree (e.g. `quilt-native`),
+and ones that are safe to force-rebuild on a warm tree without cascading.
 
 ### Running ad-hoc commands inside the build environment
 

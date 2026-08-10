@@ -25,8 +25,9 @@ cmd/yocache/web/dist/
 # Local config overrides
 yocache.local.toml
 
-# Local working notes
+# Local working notes — private scratchpad; shareable reference docs go in docs/
 TODO.md
+notes/
 
 # One-off local goreleaser validation wrapper (not part of the standard dev flow)
 /goreleaser

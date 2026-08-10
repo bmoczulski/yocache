@@ -1,25 +1,46 @@
-# YoCache - smart cache sharing solution for Yocto builds
+# YoCache — smart cache sharing for Yocto builds
 
 Sharing Yocto sstate-cache and downloads with your development team?
 
-Forget rsync sessions to HTTP server! YoCache hooks into your bitbake builds,
-uploads artifacts automatically, and serves them back to everyone
+Forget rsync sessions to an HTTP server. YoCache hooks into your bitbake
+builds, uploads artifacts automatically, and serves them back to everyone
 — one line of config away.
 
-YoCache is:
-- an HTTP server — single static binary — that acts as a shared, writable sstate + DL
-  mirror with built-in hash-equivalence.
-- a bitbake class (`meta-yocache`): wires the mirrors and handles automatic uploads.
+**[Documentation](https://yocache.dev)** ·
+[Getting started](https://yocache.dev/getting-started/) ·
+[Running with Docker](https://yocache.dev/docker/) ·
+[FAQ](https://yocache.dev/faq/)
 
-## Getting started
+## What it is
 
-### Deploy the server
+- **A server** — one static binary, or a container: a shared, *writable*
+  sstate + downloads mirror with hash-equivalence built in.
+- **A bitbake layer** (`meta-yocache`) — wires the mirrors up and uploads
+  artifacts the moment they're produced.
 
-Pre-built binaries will be on the
-[Releases](https://github.com/bmoczulski/yocache/releases) page. Until then,
-see [Building from source](#building-from-source) below.
+bitbake can read from an sstate mirror, but it has no built-in way to *push*
+to one. That gap is what YoCache exists to close.
 
-Quick check once it's running:
+## Quick start
+
+### 1. Run the server
+
+With Docker:
+
+```sh
+docker run -d --name yocache -p 6768:6768 -p 6767:6767 \
+  -v "$PWD/yocache-data":/var/lib/yocache \
+  ghcr.io/bmoczulski/yocache:latest
+```
+
+Or grab a binary from the
+[Releases](https://github.com/bmoczulski/yocache/releases) page and run it:
+
+```sh
+./yocache
+```
+
+Either way, check it's up:
 
 ```sh
 curl http://yourcache.local:6768/healthz
@@ -28,9 +49,9 @@ curl http://yourcache.local:6768/healthz
 Or open `http://yourcache.local:6768/` in a browser — it shows a dashboard
 of what the cache is holding.
 
-### Add meta-yocache to your kas project
+### 2. Point your build at it
 
-Add YoCache to your kasfile's `repos:` section:
+With kas, add YoCache to your kasfile:
 
 ```yaml
 repos:
@@ -42,90 +63,52 @@ repos:
 
 local_conf_header:
   yocache: |
-    YOCACHE_URL = "http://localhost:6768"
+    YOCACHE_URL = "http://yourcache.local:6768"
 
     # OPTIONAL: use YoCache as the hash-equivalence server — auto-picks the
     # ws:// endpoint on Yocto >= Scarthgap, or the raw-TCP listener on older
     # releases (whose bitbake has no ws:// client), same line either way
-    # BB_HASHSERVE = "${@'ws://localhost:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'localhost:6767'}"
+    # BB_HASHSERVE = "${@'ws://yourcache.local:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'yourcache.local:6767'}"
 
     # The juice!
     INHERIT += "yocache"
 ```
 
-### Without kas (manual bblayers.conf)
+Not using kas? Add `meta-yocache` to `bblayers.conf` and the same lines to
+`local.conf` — see
+[Getting started](https://yocache.dev/getting-started/).
 
-```sh
-git clone https://github.com/bmoczulski/yocache.git
-```
+### 3. Build as usual
 
-In `bblayers.conf`:
+The first build fills the cache; every build after that, on any machine
+pointed at the same server, pulls from it and tops it up automatically. If
+something isn't cached, bitbake just falls back to upstream and builds it
+locally — exactly as it would without YoCache.
 
-```
-BBLAYERS += "/path/to/yocache/meta-yocache"
-```
+## Documentation
 
-Add the same `local.conf` lines as above.
+| Page | What it covers |
+| --- | --- |
+| [Getting started](https://yocache.dev/getting-started/) | Deploy the server, enable the layer |
+| [Why YoCache](https://yocache.dev/why-yocache/) | What problem it solves, and how |
+| [Running with Docker](https://yocache.dev/docker/) | Docker, Podman, Compose, volumes |
+| [Server configuration](https://yocache.dev/server-configuration/) | Flags, environment variables, quotas, eviction |
+| [Client configuration](https://yocache.dev/client-configuration/) | bitbake variables the layer reads |
+| [FAQ](https://yocache.dev/faq/) | Common questions |
 
-## Building from source
+## Container images
 
-No local Go install needed — the toolchain lives in a container defined in
-`.devcontainer/Dockerfile` (Go 1.26).
+Published to two registries on every release, multi-arch
+(`linux/amd64`, `linux/arm64`):
 
-**Requirement:** the container must run with your host uid/gid so nothing it
-writes is root-owned and git's ownership check on `.git` passes. Use a
-rootless engine, or pass `--user` explicitly with rootful Docker.
+- `ghcr.io/bmoczulski/yocache`
+- `docker.io/moczulski/yocache`
 
-```sh
-# Build the toolchain image once (context = .devcontainer)
-docker build -t yocache-dev .devcontainer          # or: podman build ...
+## Building from source & contributing
 
-# Compile — Docker (rootful): pass your uid/gid explicitly
-docker run --rm -it --user "$(id -u):$(id -g)" \
-  -v "$PWD":/workspace -w /workspace yocache-dev go build ./...
+See [CONTRIBUTING.md](CONTRIBUTING.md) — the Go toolchain lives in a
+container, so there's nothing to install locally.
 
-# Compile — rootless Podman: uid maps automatically
-podman run --rm -it --userns=keep-id \
-  -v "$PWD":/workspace -w /workspace yocache-dev go build ./...
+## License
 
-# Run the daemon — Docker (rootful)
-docker run --rm -it --user "$(id -u):$(id -g)" -p 6768:6768 \
-  -v "$PWD":/workspace -w /workspace yocache-dev \
-  go run ./cmd/yocache --addr :6768
-
-# Run the daemon — rootless Podman
-podman run --rm -it --userns=keep-id -p 6768:6768 \
-  -v "$PWD":/workspace -w /workspace yocache-dev \
-  go run ./cmd/yocache --addr :6768
-```
-
-Module and build caches persist in `./.cache` (git-ignored), so repeated
-builds are fast.
-
-## Development
-
-### VS Code
-
-Open the folder → **Reopen in Container**. Terminal, build, debug, and
-`gopls` all run inside. Use a rootless engine so the container user maps to
-you automatically; for Podman set `"dev.containers.dockerPath": "podman"` in
-VS Code settings.
-
-### devcontainer CLI (IDE-agnostic)
-
-```sh
-npx @devcontainers/cli up   --workspace-folder .
-npx @devcontainers/cli exec --workspace-folder . go build ./...
-```
-
-To exercise the server against a real Yocto build, see
-[testdata/yocto/README.md](testdata/yocto/README.md).
-
-## Repository layout
-
-```
-cmd/yocache/        daemon (Go)
-meta-yocache/       bitbake layer (bbclass + uploader)
-testdata/yocto/     reproducible kas build for integration testing
-.devcontainer/      containerised Go toolchain
-```
+[Apache-2.0](LICENSE).

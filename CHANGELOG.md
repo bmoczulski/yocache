@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed
+- `README.md` is now aimed at people deploying and using YoCache rather than
+  developing it: what it is, a three-step quick start covering both the
+  container and the binary, and links into [yocache.dev](https://yocache.dev).
+  Building from source, the devcontainer setup, editor configuration and the
+  project conventions move to a new `CONTRIBUTING.md`, which GitHub surfaces
+  in its own repository tab and sidebar entry.
+
 ### Added
 - Web dashboard served by the yocache binary at `/ui/` (root `/`
   redirects there). Shows storage totals for downloads, sstate, and
