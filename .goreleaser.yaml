@@ -34,6 +34,10 @@ dockers:
       - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.description={{ .Env.IMAGE_DESCRIPTION }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
   - id: yocache-linux-arm64
     ids: [yocache]
     goos: linux
@@ -47,6 +51,10 @@ dockers:
       - "{{ .Env.DOCKERHUB_IMAGE }}:{{ .Version }}-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.description={{ .Env.IMAGE_DESCRIPTION }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
 
 docker_manifests:
   - name_template: "{{ .Env.GHCR_IMAGE }}:{{ .Version }}"

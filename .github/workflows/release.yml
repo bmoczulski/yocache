@@ -130,6 +130,9 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Load image description
+        run: |
+          echo "IMAGE_DESCRIPTION=$(head -n1 .github/registry/short-description.txt)" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
@@ -138,6 +141,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_IMAGE: ghcr.io/${{ github.repository }}
           DOCKERHUB_IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/yocache
+          IMAGE_DESCRIPTION: ${{ env.IMAGE_DESCRIPTION }}
       - name: Package meta-yocache layer
         run: |
           tag="${{ needs.bump-version.outputs.tag }}"

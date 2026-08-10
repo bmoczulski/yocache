@@ -32,6 +32,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   links are rewritten to absolute `yocache.dev` URLs; the render fails rather
   than publishing a link that would 404 off-site, or a settings table whose
   columns have moved.
+- Container images now carry the standard OCI metadata labels
+  (`title`, `url`, `documentation`, `source`, `licenses`, plus `version`,
+  `revision`, `created` and `description` stamped at release time).
+  `image.source` is what links the image to this repository on GHCR, which is
+  how that package page picks up a README — GHCR has no per-package README,
+  it renders the linked repository's. `image.description` is taken from the
+  same `.github/registry/short-description.txt` as the Docker Hub short
+  description, so the two registries can't disagree.
 
 ## v0.1.10 - 2026-08-08
 
