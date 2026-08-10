@@ -1,0 +1,85 @@
+name: Docker Hub description
+# Docker Hub repository pages are not versioned — there is one description,
+# whatever tags exist — so this deliberately does NOT hang off a release.
+# It republishes whenever the content it is rendered from changes.
+on:
+  push:
+    branches: [main]
+    # Keep in step with the sources registry-overview.sh reads — a page that
+    # feeds the description but is missing here silently stops republishing.
+    paths:
+      - 'site/src/content/docs/docker.md'
+      - 'site/src/content/docs/server-configuration.md'
+      - '.github/registry/**'
+      - '.github/scripts/registry-overview.sh'
+      - '.github/workflows/dockerhub-description.yml'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: dockerhub-description
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render overview
+        run: |
+          set -euo pipefail
+          .github/scripts/registry-overview.sh > "$RUNNER_TEMP/overview.md"
+
+          chars=$(wc -m < "$RUNNER_TEMP/overview.md")
+          echo "rendered overview: $chars characters"
+          if [ "$chars" -gt 25000 ]; then
+            echo "::error::full description is $chars characters, Docker Hub allows 25000"
+            exit 1
+          fi
+
+          short=$(cat .github/registry/short-description.txt)
+          if [ "${#short}" -gt 100 ]; then
+            echo "::error::short description is ${#short} characters, Docker Hub allows 100"
+            exit 1
+          fi
+
+      - name: Publish to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "::error::vars.DOCKERHUB_USERNAME is not set"; exit 1
+          fi
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::secrets.DOCKERHUB_TOKEN is not set"; exit 1
+          fi
+
+          jwt=$(curl -sS -X POST https://hub.docker.com/v2/users/login/ \
+                  -H 'Content-Type: application/json' \
+                  -d "$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" \
+                          '{username: $u, password: $p}')" \
+                | jq -r '.token // empty')
+          if [ -z "$jwt" ]; then
+            echo "::error::Docker Hub login failed — check DOCKERHUB_TOKEN scope"; exit 1
+          fi
+          echo "::add-mask::$jwt"
+
+          jq -n --rawfile full "$RUNNER_TEMP/overview.md" \
+                --rawfile short .github/registry/short-description.txt \
+                '{full_description: $full, description: ($short | rtrimstr("\n"))}' \
+            > "$RUNNER_TEMP/payload.json"
+
+          code=$(curl -sS -o "$RUNNER_TEMP/response.json" -w '%{http_code}' \
+                   -X PATCH \
+                   -H "Authorization: JWT $jwt" \
+                   -H 'Content-Type: application/json' \
+                   -d "@$RUNNER_TEMP/payload.json" \
+                   "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/yocache/")
+          if [ "$code" != "200" ]; then
+            echo "::error::Docker Hub PATCH returned HTTP $code"
+            cat "$RUNNER_TEMP/response.json"
+            exit 1
+          fi
+          echo "Docker Hub description updated (HTTP $code)."

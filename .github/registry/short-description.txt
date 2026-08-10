@@ -1,0 +1,1 @@
+Shared, writable sstate + downloads cache for Yocto builds, with hash equivalence built in.

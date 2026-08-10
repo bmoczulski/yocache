@@ -21,6 +21,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Node; the SPA is compiled at build time and embedded via `//go:embed`.
   Assets go gzip-compressed on the wire — mainly for the UI, but JSON
   API responses benefit too.
+- The Docker Hub repository page is now populated automatically. A new
+  `Docker Hub description` workflow renders it from the documentation site,
+  so nothing on it is maintained twice: the container instructions come from
+  `site/src/content/docs/docker.md`, and the full settings table is lifted
+  from `site/src/content/docs/server-configuration.md` and reshaped to lead
+  with the environment variable, since nobody reading a registry page can
+  pass a CLI flag. Registry-only framing lives in `.github/registry/`, and
+  the result is PATCHed to Docker Hub whenever any of those change. Relative
+  links are rewritten to absolute `yocache.dev` URLs; the render fails rather
+  than publishing a link that would 404 off-site, or a settings table whose
+  columns have moved.
 
 ## v0.1.10 - 2026-08-08
 
