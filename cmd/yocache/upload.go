@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,8 +87,8 @@ func (q *quotaTracker) release(n int64) {
 //
 // It is crash- and reader-safe by construction. The body is written to a private
 // staging directory (<dir>/.uploads/<randomToken>/<basename>) and only atomically
-// rename(2)d onto the final name once the whole payload has landed and been
-// fsync'd. Consequences:
+// linked onto the final name via link(2) once the whole payload has landed and
+// been fsync'd. Consequences:
 //
 //   - A reader never observes a partial blob: it sees either no file or the
 //     complete one.  The .uploads subtree is unreachable via the HTTP API
@@ -96,11 +97,16 @@ func (q *quotaTracker) release(n int64) {
 //     .uploads, removed immediately on the failure path here and, as a backstop
 //     for a hard kill, wiped entirely at startup by wipeUploadStaging.
 //   - Two builds uploading the same artifact concurrently each get their own
-//     randomToken subdirectory, so they can't trample each other; whichever
-//     renames last wins, and either way the published file is whole.
-//   - Staging in a subdirectory of dir (same filesystem as the final path) keeps
-//     the rename atomic and avoids appending a suffix to a name that may already
-//     be near the filesystem's 255-byte limit.
+//     randomToken subdirectory, so they can't trample each other. link(2) is
+//     create-if-not-exists at the kernel level, so exactly one racer publishes:
+//     the loser sees EEXIST, refunds its quota reservation, and returns 412
+//     (same-size — the common case) or 409 (size mismatch). Using rename(2)
+//     here would silently overwrite and let both racers report success while
+//     inflating the quota counter by one full body.
+//   - Staging in a subdirectory of dir (same filesystem as the final path) is
+//     required for link(2) — a hard link cannot cross filesystems — and also
+//     avoids appending a suffix to a name that may already be near the
+//     filesystem's 255-byte limit.
 type blobUploader struct {
 	dir       string           // blob store directory (e.g. <data-dir>/downloads)
 	uploadDir string           // staging area: dir/.uploads; per-request tmpDirs live here
@@ -173,7 +179,11 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	}
 	// If-None-Match: * means "only create if absent". Check before doing any
 	// filesystem work so we don't race to mkdir for a blob we'll reject.
+	// replacing=true means we intend to overwrite an existing file (the
+	// growing-VCS case); the publish step then uses rename(2) instead of
+	// link(2), since link(2) refuses to clobber.
 	existingSize := int64(0)
+	replacing := false
 	if stored, statErr := os.Stat(final); statErr == nil {
 		existingSize = stored.Size()
 		if stored.Size() != r.ContentLength {
@@ -182,6 +192,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 				// monotonically as the upstream repository accumulates history.
 				// A larger incoming file is a fresher snapshot — let it fall
 				// through and replace the stored one.
+				replacing = true
 				u.log.Info("upload: replacing with larger VCS mirror tarball",
 					"kind", u.kind, "name", name,
 					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
@@ -291,22 +302,22 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Until the rename commits, every exit path must clean up the staging dir —
+	// Until the publish commits, every exit path must clean up the staging dir —
 	// a client disconnect mid-copy arrives here as an io.Copy error.
 	// release(net) undoes the quota reservation on any failure; on success
 	// reserve() already credited the bytes so no further adjustment is needed.
+	// On success, tmp still exists (link(2) creates a new name pointing at the
+	// same inode, leaving tmp in place); RemoveAll unlinks tmp along with tmpDir.
+	// Failure to remove the staging dir is cosmetic — startup wipe clears any
+	// leftovers next time.
 	committed := false
 	defer func() {
 		f.Close()
+		if err := os.RemoveAll(tmpDir); err != nil {
+			u.log.Warn("upload: staging dir not cleaned up", "dir", tmpDir, "err", err)
+		}
 		if !committed {
-			if err := os.RemoveAll(tmpDir); err != nil {
-				u.log.Warn("upload: staging dir not cleaned up", "dir", tmpDir, "err", err)
-			}
 			u.quota.release(net)
-		} else {
-			// tmpDir is empty after the rename; remove it.  Failure is cosmetic —
-			// startup wipe clears any leftovers next time.
-			_ = os.Remove(tmpDir)
 		}
 	}()
 
@@ -333,12 +344,59 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot persist upload", http.StatusInternalServerError)
 		return
 	}
-	// Atomic publish. rename(2) replaces the name in one step so a reader
-	// never observes a partially-written file (the If-None-Match check above
-	// prevents us reaching this point for blobs that already exist).
-	if err := os.Rename(tmp, final); err != nil {
-		u.log.Error("upload: rename failed", "tmp", tmp, "final", final, "err", err, "remote", r.RemoteAddr)
-		http.Error(w, "cannot publish upload", http.StatusInternalServerError)
+	// Publish. Two shapes here:
+	//   - replacing=true (growing-VCS): the pre-stat arm already committed to
+	//     overwrite an existing file, so we need rename(2) — link(2) would
+	//     refuse to clobber. A concurrent racer in this narrow arm could still
+	//     over-count by the delta; growing-VCS tarballs are rare enough for
+	//     that residual drift to be acceptable, and it heals on restart.
+	//   - replacing=false (the common path): use link(2). It's kernel-atomic
+	//     create-if-not-exists, so two racers that both passed the pre-stat
+	//     "not there" check can't both commit — one loses with EEXIST and
+	//     refunds. rename(2) would let them both succeed and inflate the
+	//     quota counter by one full body per race lost.
+	if replacing {
+		if err := os.Rename(tmp, final); err != nil {
+			u.log.Error("upload: rename failed", "tmp", tmp, "final", final, "err", err, "remote", r.RemoteAddr)
+			http.Error(w, "cannot publish upload", http.StatusInternalServerError)
+			return
+		}
+	} else if err := os.Link(tmp, final); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			u.log.Error("upload: link failed", "tmp", tmp, "final", final, "err", err, "remote", r.RemoteAddr)
+			http.Error(w, "cannot publish upload", http.StatusInternalServerError)
+			return
+		}
+		stored, statErr := os.Stat(final)
+		if statErr != nil {
+			// link said the name exists, stat says it doesn't — an in-between
+			// eviction is the only plausible cause. Treat as an internal error;
+			// the client will retry and hit the empty-slot path cleanly.
+			u.log.Error("upload: link EEXIST but stat missing",
+				"final", final, "err", statErr, "remote", r.RemoteAddr)
+			http.Error(w, "cannot publish upload", http.StatusInternalServerError)
+			return
+		}
+		if stored.Size() == r.ContentLength {
+			u.log.Info("upload: lost concurrent-publish race",
+				"kind", u.kind, "name", name, "bytes", r.ContentLength, "remote", r.RemoteAddr)
+			if u.inventory != nil {
+				if err := u.inventory.Touch(u.kind, name); err != nil {
+					u.log.Warn("upload: race loser: inventory touch failed",
+						"kind", u.kind, "name", name, "err", err)
+				}
+			}
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		// Size mismatch after race — report as conflict. Client retries and
+		// the sequential re-upload path decides replace-vs-conflict.
+		u.log.Warn("upload: conflict after concurrent-publish race",
+			"kind", u.kind, "name", name,
+			"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+			"remote", r.RemoteAddr)
+		w.Header().Set("X-Yocache-Existing-Size", strconv.FormatInt(stored.Size(), 10))
+		http.Error(w, fmt.Sprintf("conflict: existing blob is %d bytes, proposed is %d bytes", stored.Size(), r.ContentLength), http.StatusConflict)
 		return
 	}
 	committed = true

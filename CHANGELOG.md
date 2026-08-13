@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+- Two clients uploading the same blob at the same moment no longer
+  double-count against the quota; the storage limit stays accurate under
+  concurrent pushes.
+
 ### Changed
 - `README.md` is now aimed at people deploying and using YoCache rather than
   developing it: what it is, a three-step quick start covering both the

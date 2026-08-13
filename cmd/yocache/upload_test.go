@@ -595,6 +595,97 @@ func TestPutQuotaConcurrentExclusion(t *testing.T) {
 	}
 }
 
+// gatedReader wraps r and calls gate() exactly once on the first Read, then
+// forwards subsequent reads unmodified. Used to hold a request body inside the
+// handler at a chosen point so a second goroutine can be lined up against it.
+type gatedReader struct {
+	r    io.Reader
+	gate func()
+	once sync.Once
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	g.once.Do(g.gate)
+	return g.r.Read(p)
+}
+
+// TestPutConcurrentSameNamePublishesOnce verifies that two clients uploading
+// the same blob at the same moment leave the quota counter in agreement with
+// what actually landed on disk. Without atomic create-if-not-exists at publish
+// time, both requests stat "empty", both reserve ContentLength bytes, and both
+// rename — one file on disk but the counter reads 2×payload, silently shrinking
+// effective quota for every subsequent upload.
+//
+// The gated reader blocks each request's body Read on entry, so both goroutines
+// have already stat'd before either can proceed to publish. That makes the race
+// deterministic instead of timing-dependent.
+func TestPutConcurrentSameNamePublishesOnce(t *testing.T) {
+	u := testUploaderWithQuota(t, "downloads", 1024)
+	name := "blob.tar.gz"
+	payload := "hello"
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	newReq := func() *http.Request {
+		body := &gatedReader{
+			r: strings.NewReader(payload),
+			gate: func() {
+				started <- struct{}{}
+				<-release
+			},
+		}
+		req := httptest.NewRequest(http.MethodPut, "/downloads/"+name, body)
+		req.Header.Set("If-None-Match", "*")
+		req.ContentLength = int64(len(payload))
+		return req
+	}
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			u.put(rec, newReq())
+			codes[i] = rec.Code
+		}(i)
+	}
+	<-started
+	<-started
+	close(release)
+	wg.Wait()
+
+	entries, err := os.ReadDir(u.dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	var blobs int
+	var onDisk int64
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue // staging subtree
+		}
+		fi, err := e.Info()
+		if err != nil {
+			t.Fatalf("stat %s: %v", e.Name(), err)
+		}
+		blobs++
+		onDisk += fi.Size()
+	}
+	if blobs != 1 {
+		t.Errorf("blobs on disk = %d, want 1; codes=%v", blobs, codes)
+	}
+	if onDisk != int64(len(payload)) {
+		t.Errorf("on-disk bytes = %d, want %d", onDisk, len(payload))
+	}
+	if got := u.quota.Used(); got != onDisk {
+		t.Errorf("quota.Used() = %d, want %d (must match on-disk size, not sum of racers' reservations); codes=%v",
+			got, onDisk, codes)
+	}
+}
+
 func TestParseIdentityPath(t *testing.T) {
 	cases := []struct {
 		path      string
