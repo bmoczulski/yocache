@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.11 - 2026-08-14
+
 ### Fixed
 - Two clients uploading the same blob at the same moment no longer
   double-count against the quota; the storage limit stays accurate under
