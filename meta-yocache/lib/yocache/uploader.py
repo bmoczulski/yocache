@@ -107,12 +107,17 @@ class Uploader:
     upload must never break a build.
     """
 
-    def __init__(self, sock_path, base_url, threads, build_meta=None, skip_types=None):
+    def __init__(self, sock_path, base_url, threads, build_meta=None, skip_types=None,
+                 verbose=False):
         self.sock_path = sock_path
         self.base_url = base_url.rstrip("/")
         self.threads = max(1, int(threads))
         self.skip_types = frozenset(skip_types or ())
         self.build_meta = build_meta or {}
+        # Per-PUT success/skip notes are the dominant source of NOTE-level
+        # noise on any build with real cache traffic (one line per artifact).
+        # Quiet by default; failures are always logged regardless.
+        self.verbose = verbose
         self.state = IDLE
         self._queue = queue.Queue()
         self._lsock = None
@@ -307,9 +312,11 @@ class Uploader:
 
     def _handle_final(self, status, headers, url, size, body):
         if status == 201:
-            _note("PUT %s (%d bytes)" % (url, size))
+            if self.verbose:
+                _note("PUT %s (%d bytes)" % (url, size))
         elif status == 412:
-            _note("skipped %s (server already has it)" % url)
+            if self.verbose:
+                _note("skipped %s (server already has it)" % url)
         elif status == 409:
             existing = headers.get("x-yocache-existing-size")
             _note("PUT %s failed (409 conflict): local=%d bytes, existing=%s bytes" %
@@ -342,12 +349,13 @@ def start(d):
         # Normalize "sstate-cache" -> "sstate" so both spellings work.
         raw_types = (d.getVar("YOCACHE_SKIP_UPLOAD_TYPES") or "").split()
         skip_types = {"sstate" if t == "sstate-cache" else t for t in raw_types}
+        verbose = (d.getVar("YOCACHE_UPLOAD_LOG_LEVEL") or "quiet") == "verbose"
         if not sock_path:
             _warn("YOCACHE_UPLOAD_SOCK unset; uploader not started")
             return
 
         build_meta = {var: d.getVar(var) for var in _BUILD_META_VARS}
-        up = Uploader(sock_path, base_url, threads, build_meta, skip_types)
+        up = Uploader(sock_path, base_url, threads, build_meta, skip_types, verbose)
         try:
             up.start()
         except Exception as exc:

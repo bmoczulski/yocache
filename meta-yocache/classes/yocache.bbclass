@@ -240,6 +240,12 @@ def _yocache_blocked_by(d, blocked):
 # Size of the cooker uploader's PUT worker pool.
 YOCACHE_UPLOAD_THREADS ??= "4"
 
+# Per-artifact upload logging: "quiet" (default) only logs failures/conflicts;
+# "verbose" also logs a NOTE for every successful PUT and every skip (server
+# already has it) — useful for devel, too noisy for routine builds since it's
+# one line per artifact.
+YOCACHE_UPLOAD_LOG_LEVEL ??= "quiet"
+
 # Make the git mirror tarballs actually exist so there's something to upload:
 # without these, DL_DIR holds only the bare git2/<...> clone dir, no tarball
 # (see notes/git-mirror-tarballs.md). Weak so a build can still opt out.

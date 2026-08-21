@@ -17,6 +17,7 @@ opt-outs and tuning knobs with working defaults.
 | `YOCACHE_SKIP_UPLOAD_TYPES` | *(empty)* | Artifact types **not** to upload: `sstate`, `downloads`, or `all`. With `all` the build only consumes the cache, never feeds it. |
 | `YOCACHE_BLOCK_RECIPES` | *(empty)* | Space-separated recipe names never uploaded from this build — the client-side counterpart of the server's `--block-recipe`. Propagates downstream: a recipe that transitively `DEPENDS` on a blocked recipe is skipped too (logged as `depends on blocked recipe(s): ...`), since its own sstate can inherit a blocked recipe's non-determinism even when its taskhash doesn't show it. |
 | `YOCACHE_UPLOAD_THREADS` | `4` | How many artifacts are uploaded in parallel. |
+| `YOCACHE_UPLOAD_LOG_LEVEL` | `quiet` | `quiet` only logs upload failures/conflicts; `verbose` also logs a NOTE for every successful PUT and every skip (server already has it) — one line per artifact, handy for devel but noisy on routine builds. |
 
 ## Common setups
 

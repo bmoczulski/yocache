@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `YOCACHE_UPLOAD_LOG_LEVEL` bitbake variable to control per-artifact upload
+  logging. Defaults to `quiet` (only failures/conflicts are logged); `verbose`
+  restores the previous behavior of a NOTE line for every successful or
+  skipped PUT.
+
 ## v0.1.11 - 2026-08-14
 
 ### Fixed
