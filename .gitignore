@@ -32,6 +32,9 @@ notes/
 # One-off local goreleaser validation wrapper (not part of the standard dev flow)
 /goreleaser
 
+# Python bytecode cache
+meta-yocache/lib/yocache/__pycache__/
+
 # Editor / OS
 .idea/
 .vscode/*
