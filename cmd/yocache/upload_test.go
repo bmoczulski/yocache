@@ -200,6 +200,38 @@ func TestPutConflictSizeMismatch(t *testing.T) {
 	}
 }
 
+// TestPutSstateSizeMismatchSkips verifies that an sstate upload whose name
+// already exists on disk with a different size is skipped (412), not
+// rejected as a conflict (409): the name encodes the unihash, which
+// bitbake's hash-equivalence protocol already declared interchangeable
+// across whichever build produced it.
+func TestPutSstateSizeMismatchSkips(t *testing.T) {
+	u := testUploader(t, "sstate")
+	name := "sstate:foo:core2-64:1.0:r0::9:deadbeef_package.tar.zst.siginfo"
+	original := "original siginfo from the first build"
+
+	rec := httptest.NewRecorder()
+	u.put(rec, putReq(t, "sstate", name, original))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("initial put status = %d, want 201", rec.Code)
+	}
+
+	// A redirected build's own siginfo, same name, different size.
+	rec = httptest.NewRecorder()
+	u.put(rec, putReq(t, "sstate", name, "a differently sized siginfo from a redirected build"))
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("size-mismatch put status = %d, want 412", rec.Code)
+	}
+
+	got, err := os.ReadFile(filepath.Join(u.dir, name))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("stored blob = %q, want %q (skip must not overwrite)", got, original)
+	}
+}
+
 // TestPutGrowingVCSTarballLargerReplaces verifies that VCS mirror tarballs
 // whose names do not encode a revision (git2_*, gitshallow_*, hg_*, repo_*)
 // accept a larger upload and replace the stored snapshot.
@@ -683,6 +715,75 @@ func TestPutConcurrentSameNamePublishesOnce(t *testing.T) {
 	if got := u.quota.Used(); got != onDisk {
 		t.Errorf("quota.Used() = %d, want %d (must match on-disk size, not sum of racers' reservations); codes=%v",
 			got, onDisk, codes)
+	}
+}
+
+// TestPutSstateConcurrentSizeMismatchSkips is TestPutConcurrentSameNamePublishesOnce's
+// counterpart for two racers with genuinely different payload sizes (two
+// hash-equiv-redirected builds publishing under the same unihash at once):
+// the loser must see 412, not 409, and the winner's bytes must be the ones
+// left on disk.
+func TestPutSstateConcurrentSizeMismatchSkips(t *testing.T) {
+	u := testUploaderWithQuota(t, "sstate", 1024)
+	name := "sstate:foo:core2-64:1.0:r0::9:deadbeef_package.tar.zst.siginfo"
+	payloads := []string{"short one", "a rather longer payload from the other build"}
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	newReq := func(payload string) *http.Request {
+		body := &gatedReader{
+			r: strings.NewReader(payload),
+			gate: func() {
+				started <- struct{}{}
+				<-release
+			},
+		}
+		req := httptest.NewRequest(http.MethodPut, "/sstate/"+name, body)
+		req.Header.Set("If-None-Match", "*")
+		req.ContentLength = int64(len(payload))
+		return req
+	}
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			u.put(rec, newReq(payloads[i]))
+			codes[i] = rec.Code
+		}(i)
+	}
+	<-started
+	<-started
+	close(release)
+	wg.Wait()
+
+	var created, skipped int
+	for _, c := range codes {
+		switch c {
+		case http.StatusCreated:
+			created++
+		case http.StatusPreconditionFailed:
+			skipped++
+		}
+	}
+	if created != 1 || skipped != 1 {
+		t.Fatalf("codes = %v, want exactly one 201 and one 412", codes)
+	}
+
+	got, err := os.ReadFile(filepath.Join(u.dir, name))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+	winner := payloads[0]
+	if codes[1] == http.StatusCreated {
+		winner = payloads[1]
+	}
+	if string(got) != winner {
+		t.Errorf("stored blob = %q, want winner's payload %q", got, winner)
 	}
 }
 

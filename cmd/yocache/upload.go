@@ -136,6 +136,18 @@ func newBlobUploader(dir, kind string, log *slog.Logger, ledger, accessLog *Ledg
 	return &blobUploader{dir: dir, uploadDir: uploadDir, kind: kind, log: log, ledger: ledger, accessLog: accessLog, quota: quota, inventory: inv, eviction: eviction}, nil
 }
 
+// skipExisting is the shared tail of every "we already have an equivalent
+// object under this name" path: touch it for LRU purposes and answer 412.
+// Callers own their own log line since the reason for skipping differs.
+func (u *blobUploader) skipExisting(w http.ResponseWriter, name string) {
+	if u.inventory != nil {
+		if err := u.inventory.Touch(u.kind, name); err != nil {
+			u.log.Warn("upload: skip: inventory touch failed", "kind", u.kind, "name", name, "err", err)
+		}
+	}
+	w.WriteHeader(http.StatusPreconditionFailed)
+}
+
 // put handles PUT /<kind>/<name>.
 func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 	// A client not using Expect: 100-continue may already be streaming its
@@ -197,6 +209,20 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 					"kind", u.kind, "name", name,
 					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
 					"remote", r.RemoteAddr)
+			} else if u.kind == "sstate" {
+				// sstate names encode the unihash bitbake's hash-equivalence
+				// protocol already declared interchangeable with whatever else
+				// shares it — a size difference here just means a different,
+				// hash-equiv-redirected build produced its own variant (distinct
+				// .siginfo provenance, or non-reproducible bytes in the archive
+				// itself). Bitbake never compares these bytewise either, so keep
+				// whichever copy we already have instead of conflicting.
+				u.log.Info("upload: already exists, skipping — sstate variant differs in size (hash-equiv redirection)",
+					"kind", u.kind, "name", name,
+					"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+					"remote", r.RemoteAddr)
+				u.skipExisting(w, name)
+				return
 			} else {
 				// All other size mismatches are a conflict: two objects
 				// claiming the same identity, or a VCS tarball that is
@@ -215,13 +241,7 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 			// are stable) and skip — no need to re-transfer what we already hold.
 			u.log.Info("upload: already exists, skipping",
 				"kind", u.kind, "name", name, "remote", r.RemoteAddr)
-			if u.inventory != nil {
-				if err := u.inventory.Touch(u.kind, name); err != nil {
-					u.log.Warn("upload: already exists: inventory touch failed",
-						"kind", u.kind, "name", name, "err", err)
-				}
-			}
-			w.WriteHeader(http.StatusPreconditionFailed)
+			u.skipExisting(w, name)
 			return
 		}
 	}
@@ -380,13 +400,17 @@ func (u *blobUploader) put(w http.ResponseWriter, r *http.Request) {
 		if stored.Size() == r.ContentLength {
 			u.log.Info("upload: lost concurrent-publish race",
 				"kind", u.kind, "name", name, "bytes", r.ContentLength, "remote", r.RemoteAddr)
-			if u.inventory != nil {
-				if err := u.inventory.Touch(u.kind, name); err != nil {
-					u.log.Warn("upload: race loser: inventory touch failed",
-						"kind", u.kind, "name", name, "err", err)
-				}
-			}
-			w.WriteHeader(http.StatusPreconditionFailed)
+			u.skipExisting(w, name)
+			return
+		}
+		if u.kind == "sstate" {
+			// Same reasoning as the pre-stat sstate branch above, just hit via
+			// the concurrent-publish race instead of a pre-existing blob.
+			u.log.Info("upload: lost concurrent-publish race — sstate variant differs in size (hash-equiv redirection)",
+				"kind", u.kind, "name", name,
+				"stored_bytes", stored.Size(), "incoming_bytes", r.ContentLength,
+				"remote", r.RemoteAddr)
+			u.skipExisting(w, name)
 			return
 		}
 		// Size mismatch after race — report as conflict. Client retries and

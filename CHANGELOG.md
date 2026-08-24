@@ -11,6 +11,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   restores the previous behavior of a NOTE line for every successful or
   skipped PUT.
 
+### Fixed
+- sstate uploads that land under a unihash another build already populated
+  (a genuine hash-equivalence redirection) no longer 409-conflict on a size
+  mismatch — they're skipped, since that identity was already declared
+  interchangeable by bitbake itself.
+
 ## v0.1.11 - 2026-08-14
 
 ### Fixed
