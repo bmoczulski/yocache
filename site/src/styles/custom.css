@@ -11,6 +11,22 @@
 	}
 }
 
+/* Give the landing page's hero diagram the room Starlight's default 25rem
+   cap leaves unused — there's a lot of empty space beside it otherwise. */
+.hero > img,
+.hero > .hero-html {
+	width: min(92%, 32rem);
+}
+@media (min-width: 50rem) {
+	.hero {
+		grid-template-columns: 4fr 5fr;
+	}
+	.hero > img,
+	.hero > .hero-html {
+		width: min(100%, 42rem);
+	}
+}
+
 /* Keep the first column (flag names) from wrapping in the server config table. */
 .no-wrap-col1 table td:first-child,
 .no-wrap-col1 table th:first-child {
