@@ -28,6 +28,8 @@ an sstate object the cache doesn't have yet, it uploads it — automatically,
 in the background, while the build runs. The next machine to need that
 artifact gets it from the cache.
 
+![One machine's build uploads new sstate and downloads to YoCache; every other developer and CI node fetches them back.](../../assets/team-cache-flow.svg)
+
 The result is a mirror that maintains itself:
 
 - **No sync machinery.** There is no rsync, no cron, no blessed builder. The
