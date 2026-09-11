@@ -10,6 +10,28 @@ export default defineConfig({
 			title: 'YoCache',
 			description:
 				'Smart cache sharing for Yocto builds — a shared, writable sstate and downloads mirror with automatic uploads.',
+			logo: {
+				light: './src/assets/yocache-banner-light.svg',
+				dark: './src/assets/yocache-banner-dark.svg',
+				replacesTitle: true,
+			},
+			favicon: '/favicon.svg',
+			head: [
+				// Dark-mode favicon: the light one has dark ink, invisible on a dark tab strip.
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'icon',
+						href: '/favicon-dark.svg',
+						type: 'image/svg+xml',
+						media: '(prefers-color-scheme: dark)',
+					},
+				},
+				{
+					tag: 'link',
+					attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.svg' },
+				},
+			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/bmoczulski/yocache' }],
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [

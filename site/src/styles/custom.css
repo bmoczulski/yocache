@@ -1,3 +1,16 @@
+/* Brand banner in the header: it carries the wordmark plus the "Smart Yocto
+   Cache Server" slogan line, so give it more height than a bare wordmark. */
+.site-title img {
+	height: 2.5rem;
+	width: auto;
+	max-width: none;
+}
+@media (max-width: 50rem) {
+	.site-title img {
+		height: 2rem;
+	}
+}
+
 /* Keep the first column (flag names) from wrapping in the server config table. */
 .no-wrap-col1 table td:first-child,
 .no-wrap-col1 table th:first-child {
