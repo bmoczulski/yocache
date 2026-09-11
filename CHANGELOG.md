@@ -10,6 +10,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   logging. Defaults to `quiet` (only failures/conflicts are logged); `verbose`
   restores the previous behavior of a NOTE line for every successful or
   skipped PUT.
+- Web dashboard header now shows the YoCache brand mark and links to
+  [yocache.dev](https://yocache.dev).
 
 ### Fixed
 - sstate uploads that land under a unihash another build already populated
