@@ -1,6 +1,6 @@
 ---
 title: Client configuration
-description: meta-yocache variables that control how your build uses the cache.
+description: BitBake variables in meta-yocache that control how your Yocto build uploads to and fetches from the shared sstate and downloads cache.
 ---
 
 Everything on the build side is a bitbake variable, set in

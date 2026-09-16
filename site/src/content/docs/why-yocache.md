@@ -1,6 +1,6 @@
 ---
 title: Why YoCache
-description: The problem with sharing Yocto caches by hand, and how YoCache solves it.
+description: Why manually shared sstate-cache and DL_DIR mirrors don't scale for a Yocto build farm, and how YoCache's writable, auto-uploading cache fixes it.
 ---
 
 ## The problem

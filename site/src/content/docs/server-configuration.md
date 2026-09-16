@@ -1,6 +1,6 @@
 ---
 title: Server configuration
-description: Command-line flags for the YoCache server.
+description: Command-line flags for the YoCache sstate and downloads cache server — storage quota, eviction policy, hash-equivalence ports, and more.
 ---
 
 The server needs no configuration file — everything is a command-line flag,

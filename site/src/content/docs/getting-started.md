@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Deploy the YoCache server and enable it in your Yocto build in a few minutes.
+description: Deploy a writable sstate and downloads cache server and enable it in your Yocto/BitBake build in a few minutes.
 ---
 
 YoCache has two halves that you set up once:

@@ -1,6 +1,6 @@
 ---
 title: Running with Docker
-description: Run the YoCache server as a container — Docker, Podman, and Docker Compose examples.
+description: Run the YoCache sstate and downloads cache server as a container, with Docker, Podman, and Docker Compose examples.
 ---
 
 Every release publishes a multi-arch (`linux/amd64`, `linux/arm64`) image to

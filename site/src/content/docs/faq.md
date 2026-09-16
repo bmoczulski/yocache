@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Frequently asked questions about YoCache.
+description: Answers on Yocto release compatibility, sstate and downloads storage, hash equivalence, and how YoCache's cache eviction and quotas work.
 ---
 
 ## Which Yocto releases does it work with?

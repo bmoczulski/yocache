@@ -9,7 +9,7 @@ export default defineConfig({
 		starlight({
 			title: 'YoCache',
 			description:
-				'Smart cache sharing for Yocto builds — a shared, writable sstate and downloads mirror with automatic uploads.',
+				'Shared, writable sstate and downloads cache for Yocto/BitBake builds — automatic uploads, built-in hash equivalence, no more hand-rolled rsync mirrors.',
 			logo: {
 				light: './src/assets/yocache-banner-light.svg',
 				dark: './src/assets/yocache-banner-dark.svg',
