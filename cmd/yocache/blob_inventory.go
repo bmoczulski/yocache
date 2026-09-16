@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -265,6 +266,27 @@ func (b *blobInventory) Retrofit(stores map[string]string) error {
 	return nil
 }
 
+// Reconcile removes inventory rows whose backing file is gone — e.g. deleted
+// out-of-band while the server wasn't running to see it via eviction's own
+// cleanup (evictGroup only prunes a stale row when it happens to visit that
+// blob during an LRU pass, which requires quota pressure and may never
+// happen). Unlike eviction, this is plain per-row cleanup, not group-aware:
+// it only fixes the inventory (and therefore /api/stats and LRU candidate
+// accuracy), so a partially-missing sstate group doesn't need special
+// handling here. Complements Retrofit, which adds the opposite direction
+// (files present with no DB row). Returns the number of rows removed.
+func (b *blobInventory) Reconcile(stores map[string]string) (int64, error) {
+	var removed int64
+	for kind, dir := range stores {
+		n, err := b.reconcileStore(kind, dir)
+		removed += n
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
 // RecordBuildDownload attributes a cache hit to the requesting build.
 // artifactKey is the dedup key for the fetched artifact (sstateChecksum(path)
 // for sstate, path for downloads). bytes and ms are captured only on the
@@ -323,4 +345,45 @@ func (b *blobInventory) retrofitStore(kind, dir string) error {
 		)
 		return execErr
 	})
+}
+
+// reconcileStore stats every path currently recorded for kind and deletes the
+// rows whose file no longer exists. A stat error other than "not exist"
+// (permission denied, I/O error, …) is treated as inconclusive and the row is
+// left alone rather than guessed away.
+func (b *blobInventory) reconcileStore(kind, dir string) (int64, error) {
+	rows, err := b.db.Query(`SELECT path FROM blobs WHERE kind = ?`, kind)
+	if err != nil {
+		return 0, fmt.Errorf("inventory reconcile %s: %w", kind, err)
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("inventory reconcile %s: %w", kind, err)
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("inventory reconcile %s: %w", kind, err)
+	}
+	rows.Close()
+
+	var removed int64
+	for _, p := range paths {
+		_, statErr := os.Stat(filepath.Join(dir, p))
+		if statErr == nil {
+			continue
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if err := b.Remove(kind, p); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
 }

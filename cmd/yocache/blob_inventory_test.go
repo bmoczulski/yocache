@@ -363,3 +363,47 @@ func TestBlobInventoryRetrofitSkipsExisting(t *testing.T) {
 		t.Errorf("Retrofit overwrote existing record: size=%d accessedAt=%d, want 999/42", size, accessedAt)
 	}
 }
+
+func TestBlobInventoryReconcile(t *testing.T) {
+	inv, db := newTestInventory(t)
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "present.txt"), []byte("here"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	insertBlobAt(t, db, "downloads", "present.txt", 4, 1)
+	insertBlobAt(t, db, "downloads", "gone.txt", 5, 2) // no backing file
+
+	removed, err := inv.Reconcile(map[string]string{"downloads": dir})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1", removed)
+	}
+
+	if _, _, _, found := queryBlobRow(t, db, "downloads", "present.txt"); !found {
+		t.Error("present.txt row was removed but its file exists")
+	}
+	if _, _, _, found := queryBlobRow(t, db, "downloads", "gone.txt"); found {
+		t.Error("gone.txt row survived Reconcile despite no backing file")
+	}
+}
+
+func TestBlobInventoryReconcileNoop(t *testing.T) {
+	inv, db := newTestInventory(t)
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	insertBlobAt(t, db, "downloads", "a.txt", 1, 1)
+
+	removed, err := inv.Reconcile(map[string]string{"downloads": dir})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0 when every row has a backing file", removed)
+	}
+}

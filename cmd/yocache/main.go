@@ -187,6 +187,18 @@ func main() {
 	}
 	log.Info("inventory retrofit complete")
 
+	// The opposite direction: drop rows for blobs deleted out-of-band while
+	// the server wasn't running to see it (eviction's own cleanup only prunes
+	// a stale row if it happens to visit that blob under quota pressure).
+	// Unlike Retrofit this doesn't affect qt.seed above (already disk-truth),
+	// only /api/stats and LRU candidate accuracy.
+	removed, err := inv.Reconcile(stores)
+	if err != nil {
+		log.Error("inventory reconcile failed", "err", err)
+		os.Exit(1)
+	}
+	log.Info("inventory reconcile complete", "removed", removed)
+
 	// Build the eviction manager from --evict flags.
 	var policies []EvictionPolicy
 	for _, name := range evictPolicies {

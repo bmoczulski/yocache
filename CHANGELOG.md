@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+- Startup now removes inventory rows whose backing file was deleted
+  out-of-band (e.g. manually, or lost storage) — previously only the reverse
+  (a file with no DB row) was reconciled at startup, so a missing file kept
+  inflating `/api/stats` and the startup cache-inventory line indefinitely.
+
 ## v0.1.12 - 2026-09-16
 
 ### Added
