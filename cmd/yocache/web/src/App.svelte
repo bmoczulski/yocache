@@ -20,10 +20,10 @@
 </script>
 
 <header class="topbar">
-  <div class="brand">
+  <a class="brand" href="/ui/">
     <img class="logo" src={logo} alt="" width="28" height="28" />
     <h1>YoCache</h1>
-  </div>
+  </a>
   {#if version}
     <span class="muted">
       {version.version}{version.modified ? ' (modified)' : ''}
@@ -57,6 +57,8 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    color: inherit;
+    text-decoration: none;
   }
 
   .logo {
