@@ -31,6 +31,22 @@ export default defineConfig({
 					tag: 'link',
 					attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.svg' },
 				},
+				// Social share preview image (link unfurls in Slack, Discord, X, etc.).
+				// Generated from scripts/og-image.svg — see site/scripts/generate-og-image.mjs.
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image', content: 'https://yocache.dev/og-image.png' },
+				},
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image:alt', content: 'YoCache — Smart Yocto Cache Server' },
+				},
+				{
+					tag: 'meta',
+					attrs: { name: 'twitter:image', content: 'https://yocache.dev/og-image.png' },
+				},
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/bmoczulski/yocache' }],
 			customCss: ['./src/styles/custom.css'],
