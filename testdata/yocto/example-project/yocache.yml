@@ -18,11 +18,11 @@ local_conf_header:
   yocache: |
     YOCACHE_URL = "http://localhost:6768"
 
-    # Point bitbake's hash-equivalence at yocache, spoken over WebSocket on the
-    # same port. Must live here (cooker reads BB_HASHSERVE), not in the bbclass.
-    # ws:// (not unix://) also dodges the spurious "no sstate will match" sanity
-    # warning. localhost works because kas runs with --network=host.
-    BB_HASHSERVE = "ws://localhost:6768/hashequiv"
+    # BB_HASHSERVE is no longer set here: yocache.bbclass now defaults it to
+    # ws://<YOCACHE_URL host>/hashequiv itself (weak "??=", so an explicit
+    # BB_HASHSERVE here would still win if one were ever needed).
+
+    # YOCACHE_BLOCK_RECIPES = "v86d"
 
     # The juice!
     INHERIT += "yocache"

@@ -22,6 +22,26 @@
 # local.conf / site.conf; this weak default just keeps the class self-contained.
 YOCACHE_URL ??= "http://localhost:6768"
 
+# --- Hash-equivalence (BB_HASHSERVE) default -------------------------------
+# Point bitbake's hash-equivalence at this yocache instance unless the user
+# already set BB_HASHSERVE somewhere (local.conf/site.conf/a distro conf):
+# ws:// on Yocto >= Scarthgap (whose hashserv client supports it), else the
+# dedicated raw-TCP listener (--hashequiv-addr, default :6767) for older
+# releases. "??=" is the key: it only takes effect if BB_HASHSERVE has no
+# real assignment (=, ?=, etc.) ANYWHERE, regardless of parse order, so a
+# user's own setting always wins — but it still overrides bitbake.conf's own
+# "BB_HASHSERVE ??= auto", because that's also a weak default and this class
+# is inherited (via INHERIT) after bitbake.conf is parsed, so this one wins
+# the fallback slot when nothing else set the variable for real.
+def _yocache_hashserve_default(d):
+    import urllib.parse
+    host = urllib.parse.urlsplit(d.getVar("YOCACHE_URL")).netloc
+    if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS'):
+        return "ws://%s/hashequiv" % host
+    return "%s:6767" % host.split(":")[0]
+
+BB_HASHSERVE ??= "${@_yocache_hashserve_default(d)}"
+
 # All replacements defined in build_mirroruris() in bitbake/lib/bb/fetch2/__init__.py
 #   TYPE       origud.type        e.g. git / https / crate / gitsm
 #   HOST       origud.host        e.g. git.openembedded.org
