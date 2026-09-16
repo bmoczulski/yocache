@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `yocache.bbclass` now defaults `BB_HASHSERVE` itself (`ws://` on Yocto >=
+  Scarthgap, else the raw-TCP fallback) instead of requiring it to be
+  hand-copied into `local.conf`/`site.conf`. A weak default (`??=`), so it
+  never overrides an explicit `BB_HASHSERVE` set anywhere.
+
 ### Fixed
 - Startup now removes inventory rows whose backing file was deleted
   out-of-band (e.g. manually, or lost storage) — previously only the reverse

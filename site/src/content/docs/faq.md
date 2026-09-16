@@ -10,13 +10,14 @@ The `meta-yocache` layer declares compatibility with every release from
 honister, kirkstone, langdale, mickledore, nanbield, scarthgap, styhead,
 walnascar, wrynose). Dunfell, kirkstone, and wrynose are build-tested
 end-to-end; the releases in between share the same code paths as one of
-those three, so they're covered too. The optional hash-equivalence
-integration works on every supported release: bitbake's WebSocket transport
-requires **scarthgap or newer** (`ws://yourcache.local:6768/hashequiv`), and
-older releases — whose hash-equivalence client has no `ws://` support — use
-the server's raw-TCP listener instead (`yourcache.local:6767`, on by
-default). See [Client configuration](../client-configuration/) for the
-`BB_HASHSERVE` values.
+those three, so they're covered too. The hash-equivalence integration is
+enabled automatically and works on every supported release: bitbake's
+WebSocket transport requires **scarthgap or newer**
+(`ws://yourcache.local:6768/hashequiv`), and older releases — whose
+hash-equivalence client has no `ws://` support — use the server's raw-TCP
+listener instead (`yourcache.local:6767`, on by default). See
+[Client configuration](../client-configuration/) if you need to override
+`BB_HASHSERVE` yourself.
 
 ## Can a cache problem break my build?
 

@@ -54,14 +54,13 @@ local_conf_header:
   yocache: |
     YOCACHE_URL = "http://yourcache.local:6768"
 
-    # OPTIONAL: use YoCache as the hash-equivalence server — auto-picks the
-    # ws:// endpoint on Yocto >= Scarthgap, or the raw-TCP listener on older
-    # releases (whose bitbake has no ws:// client), same line either way
-    # BB_HASHSERVE = "${@'ws://yourcache.local:6768/hashequiv' if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS') else 'yourcache.local:6767'}"
-
     # The juice!
     INHERIT += "yocache"
 ```
+
+Hash-equivalence is on by default too, once `yocache` is inherited: the layer
+points `BB_HASHSERVE` at the same server (`ws://` on Yocto >= Scarthgap, the
+raw-TCP listener on older releases) unless you set `BB_HASHSERVE` yourself.
 
 ### Without kas (manual `bblayers.conf`)
 

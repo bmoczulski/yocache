@@ -183,9 +183,18 @@ bitbake env (fallback: `/work/bitbake/lib`).
 
 yocache speaks bitbake's hash-equivalence protocol ("OEHASHEQUIV" over
 `bb.asyncrpc`) natively over **WebSocket**, on the same port 6768, at
-`/hashequiv`. Point a build at it from `local.conf`/`site.conf` (not the bbclass —
-cooker reads `BB_HASHSERVE`, a per-recipe class can't set it). WebSocket
-hash-equiv needs Yocto ≥ Scarthgap:
+`/hashequiv`. `yocache.bbclass` sets `BB_HASHSERVE` itself, via a weak
+(`??=`) default derived from `YOCACHE_URL` — `ws://<host>/hashequiv` on
+Yocto ≥ Scarthgap, else the raw-TCP fallback (`<host>:6767`) for older
+releases whose bitbake has no `ws://` client. A global `INHERIT`-ed class
+*can* set a variable the cooker reads at startup this way — it lands in the
+same base datastore `cooker.py` reads from, ahead of any base-config `??=`
+(bitbake.conf's own `BB_HASHSERVE ??= "auto"` included) since the class
+parses later; only an actual `=`/`?=` anywhere beats it, checked by presence
+of real content rather than parse order. Verified with `bitbake-getvar
+BB_HASHSERVE` in the kas-container against `testdata/yocto/example-project`.
+Override it yourself in `local.conf`/`site.conf` only if you want something
+other than this server's own endpoint:
 
 ```
 BB_HASHSERVE = "ws://localhost:6768/hashequiv"
