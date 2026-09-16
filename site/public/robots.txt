@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://yocache.dev/sitemap-index.xml
