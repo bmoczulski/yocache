@@ -1,3 +1,22 @@
+/* Retint Starlight's accent (buttons, links, focus rings) from its stock blue
+   to the brand green already used by the favicon/avatar/hero diagram
+   (#3F7D3A light / #5BB55F dark). These three vars are the whole knob:
+   https://starlight.astro.build/guides/css-and-tailwind/#theming
+   --sl-color-accent-high doubles as --sl-color-text-accent (link text, and
+   the "Get started" button / sidebar current-item background), so dark mode
+   gets the same forest green as light mode there instead of Starlight's
+   default pale mint — trying it out per-user-request, contrast tbd. */
+:root {
+	--sl-color-accent-low: hsl(123, 30%, 18%);
+	--sl-color-accent: hsl(123, 38%, 53%);
+	--sl-color-accent-high: hsl(115, 37%, 56%);
+}
+:root[data-theme='light'] {
+	--sl-color-accent-low: hsl(115, 40%, 90%);
+	--sl-color-accent: hsl(115, 37%, 36%);
+	--sl-color-accent-high: hsl(115, 45%, 24%);
+}
+
 /* Brand banner in the header: it carries the wordmark plus the "Smart Yocto
    Cache Server" slogan line, so give it more height than a bare wordmark. */
 .site-title img {
