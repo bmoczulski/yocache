@@ -16,6 +16,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   out-of-band (e.g. manually, or lost storage) — previously only the reverse
   (a file with no DB row) was reconciled at startup, so a missing file kept
   inflating `/api/stats` and the startup cache-inventory line indefinitely.
+- Web dashboard (`/ui/`) now shows the YoCache favicon (light/dark variants,
+  matching the docs site) instead of the browser's default blank tab icon.
 
 ## v0.1.12 - 2026-09-16
 
