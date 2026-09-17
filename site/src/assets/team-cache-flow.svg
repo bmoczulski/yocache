@@ -1,19 +1,35 @@
 <svg data-dc-tpl="207" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" role="img" aria-label="Alice and Bob both upload and download packages to and from the YoCache server." style="width: 100%; height: auto; display: block;">
+          <style>
+            :root {
+              --yc-accent: #3F7D3A;
+              --yc-badge-bg: #FFFDF9;
+              --yc-badge-border: #E3DED5;
+              --yc-badge-ink: #16130F;
+            }
+            @media (prefers-color-scheme: dark) {
+              :root {
+                --yc-accent: #5BB55F;
+                --yc-badge-bg: #16130F;
+                --yc-badge-border: none;
+                --yc-badge-ink: #FFFDF9;
+              }
+            }
+          </style>
           <defs data-dc-tpl="208">
             <marker data-dc-tpl="209" id="arrowE" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-              <path data-dc-tpl="210" d="M0 0 L10 5 L0 10 z" fill="#7c6ff0"></path>
+              <path data-dc-tpl="210" d="M0 0 L10 5 L0 10 z" fill="var(--yc-accent)"></path>
             </marker>
           </defs>
-          <path data-dc-tpl="211" d="M 228 292 L 302 150" fill="none" stroke="#7c6ff0" stroke-width="3.5" stroke-linecap="round" marker-start="url(#arrowE)" marker-end="url(#arrowE)"></path>
-          <path data-dc-tpl="212" d="M 598 150 L 672 292" fill="none" stroke="#7c6ff0" stroke-width="3.5" stroke-linecap="round" marker-start="url(#arrowE)" marker-end="url(#arrowE)"></path>
+          <path data-dc-tpl="211" d="M 228 292 L 302 150" fill="none" stroke="var(--yc-accent)" stroke-width="3.5" stroke-linecap="round" marker-start="url(#arrowE)" marker-end="url(#arrowE)"></path>
+          <path data-dc-tpl="212" d="M 598 150 L 672 292" fill="none" stroke="var(--yc-accent)" stroke-width="3.5" stroke-linecap="round" marker-start="url(#arrowE)" marker-end="url(#arrowE)"></path>
           <rect data-dc-tpl="213" x="310" y="30" width="280" height="134" rx="16" fill="none" stroke="#7d8590" stroke-width="3.5"></rect>
           <svg data-dc-tpl="214" x="338" y="58" width="78" height="78" viewBox="0 0 52 52">
-            <rect data-dc-tpl="215" x="0.5" y="0.5" width="51" height="51" rx="6.5" fill="#FFFDF9" stroke="#E3DED5" stroke-width="1"></rect>
+            <rect data-dc-tpl="215" x="0.5" y="0.5" width="51" height="51" rx="6.5" fill="var(--yc-badge-bg)" stroke="var(--yc-badge-border)" stroke-width="1"></rect>
             <svg data-dc-tpl="216" x="11" y="10" width="30" height="32" viewBox="6.4 2.3 87.2 91.7" fill="none">
-              <path data-dc-tpl="217" d="M12.4 8.3 50 48v40" stroke="#16130F" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
-              <path data-dc-tpl="218" d="M38.5 71.6 50 88 61.5 71.6" stroke="#16130F" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
-              <path data-dc-tpl="219" d="M87.6 8.3 50 48" stroke="#3F7D3A" stroke-width="12" stroke-linecap="round"></path>
-              <path data-dc-tpl="220" d="M84.7 28.1 87.6 8.3 68 12.3" stroke="#3F7D3A" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path data-dc-tpl="217" d="M12.4 8.3 50 48v40" stroke="var(--yc-badge-ink)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path data-dc-tpl="218" d="M38.5 71.6 50 88 61.5 71.6" stroke="var(--yc-badge-ink)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path data-dc-tpl="219" d="M87.6 8.3 50 48" stroke="var(--yc-accent)" stroke-width="12" stroke-linecap="round"></path>
+              <path data-dc-tpl="220" d="M84.7 28.1 87.6 8.3 68 12.3" stroke="var(--yc-accent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"></path>
             </svg>
           </svg>
           <svg data-dc-tpl="221" x="440" y="58" width="121" height="78" viewBox="21.25 21.25 197.5 127.5">
@@ -25,7 +41,7 @@
               <line data-dc-tpl="227" x1="40" y1="85" x2="80" y2="85"></line>
               <line data-dc-tpl="228" x1="40" y1="129" x2="80" y2="129"></line>
             </g>
-            <g data-dc-tpl="229" fill="#7c6ff0" stroke="none">
+            <g data-dc-tpl="229" fill="var(--yc-accent)" stroke="none">
               <circle data-dc-tpl="230" cx="194" cy="41" r="5"></circle>
               <circle data-dc-tpl="231" cx="194" cy="85" r="5"></circle>
               <circle data-dc-tpl="232" cx="194" cy="129" r="5"></circle>
@@ -67,14 +83,14 @@
           <text data-dc-tpl="258" x="747" y="466" text-anchor="middle" font-family="ui-monospace, monospace" font-size="16" font-weight="600" fill="#7d8590">bob@laptop</text>
           <text data-dc-tpl="259" x="568" y="517" font-family="ui-monospace, monospace" font-size="17" font-weight="600" fill="#7d8590">$ bitbake core-image-minimal</text>
 
-          <text data-dc-tpl="260" x="128" y="88" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="#7c6ff0">sstate-cache</text>
-          <text data-dc-tpl="261" x="128" y="124" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="#7c6ff0">downloads</text>
-          <text data-dc-tpl="262" x="772" y="68" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="#7c6ff0">share yours</text>
-          <text data-dc-tpl="263" x="772" y="104" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="#7c6ff0">re-use existing</text>
-          <text data-dc-tpl="264" x="772" y="140" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="#7c6ff0">save time</text>
+          <text data-dc-tpl="260" x="128" y="88" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="var(--yc-accent)">sstate-cache</text>
+          <text data-dc-tpl="261" x="128" y="124" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="var(--yc-accent)">downloads</text>
+          <text data-dc-tpl="262" x="772" y="68" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="var(--yc-accent)">share yours</text>
+          <text data-dc-tpl="263" x="772" y="104" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="var(--yc-accent)">re-use existing</text>
+          <text data-dc-tpl="264" x="772" y="140" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="27" font-weight="600" fill="var(--yc-accent)">save time</text>
 
           <g data-dc-tpl="265">
-            <g data-dc-tpl="266" transform="scale(0.82)" stroke="#7c6ff0" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
+            <g data-dc-tpl="266" transform="scale(0.82)" stroke="var(--yc-accent)" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
               <path data-dc-tpl="267" d="M0 -26 L23 -13 L23 13 L0 26 L-23 13 L-23 -13 Z"></path>
               <path data-dc-tpl="268" d="M-23 -13 L0 0 L23 -13"></path>
               <path data-dc-tpl="269" d="M0 0 L0 26"></path>
@@ -84,7 +100,7 @@
             <animateMotion data-dc-tpl="272" path="M 269 300 L 316 210" repeatCount="indefinite" calcMode="linear" dur="2.8s"></animateMotion>
           </g>
           <g data-dc-tpl="273">
-            <g data-dc-tpl="274" transform="scale(0.82)" stroke="#7c6ff0" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
+            <g data-dc-tpl="274" transform="scale(0.82)" stroke="var(--yc-accent)" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
               <path data-dc-tpl="275" d="M0 -26 L23 -13 L23 13 L0 26 L-23 13 L-23 -13 Z"></path>
               <path data-dc-tpl="276" d="M-23 -13 L0 0 L23 -13"></path>
               <path data-dc-tpl="277" d="M0 0 L0 26"></path>
@@ -95,7 +111,7 @@
             <animateMotion data-dc-tpl="281" path="M 261 143 L 201 256" dur="2.8s" begin="1.4s" repeatCount="indefinite" calcMode="linear"></animateMotion>
           </g>
           <g data-dc-tpl="282">
-            <g data-dc-tpl="283" transform="scale(0.82)" stroke="#7c6ff0" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
+            <g data-dc-tpl="283" transform="scale(0.82)" stroke="var(--yc-accent)" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
               <path data-dc-tpl="284" d="M0 -26 L23 -13 L23 13 L0 26 L-23 13 L-23 -13 Z"></path>
               <path data-dc-tpl="285" d="M-23 -13 L0 0 L23 -13"></path>
               <path data-dc-tpl="286" d="M0 0 L0 26"></path>
@@ -106,7 +122,7 @@
             <animateMotion data-dc-tpl="290" path="M 631 300 L 584 210" dur="2.8s" begin="0.7s" repeatCount="indefinite" calcMode="linear"></animateMotion>
           </g>
           <g data-dc-tpl="291">
-            <g data-dc-tpl="292" transform="scale(0.82)" stroke="#7c6ff0" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
+            <g data-dc-tpl="292" transform="scale(0.82)" stroke="var(--yc-accent)" stroke-width="3.4" fill="none" stroke-linejoin="round" stroke-linecap="round">
               <path data-dc-tpl="293" d="M0 -26 L23 -13 L23 13 L0 26 L-23 13 L-23 -13 Z"></path>
               <path data-dc-tpl="294" d="M-23 -13 L0 0 L23 -13"></path>
               <path data-dc-tpl="295" d="M0 0 L0 26"></path>
