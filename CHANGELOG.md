@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.13 - 2026-09-29
+
 ### Added
 - `yocache.bbclass` now defaults `BB_HASHSERVE` itself (`ws://` on Yocto >=
   Scarthgap, else the raw-TCP fallback) instead of requiring it to be
