@@ -19,9 +19,9 @@ package main
 // or 32 KiB chunking in bb.asyncrpc's StreamConnection applies — one frame is one
 // message. We mirror the subset of the protocol a build actually exercises
 // (verified against bitbake's siggen + hashserv.server): the handshake, ping,
-// get/get-outhash/report/report-equiv, and the get-stream/exists-stream pipelined
-// modes. Admin/gc/user RPCs and backfill-wait are never issued by a build and are
-// not implemented.
+// get/get-outhash/report/report-equiv, get-stats, and the get-stream/exists-stream
+// pipelined modes. Admin/gc/user RPCs and backfill-wait are never issued by a
+// build and are not implemented.
 //
 // This is backed by a SQLite store (hashequiv_store.go): first-write-wins
 // unihashes per (method, taskhash), plus cross-output equivalence — a reported
@@ -40,6 +40,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -63,6 +64,7 @@ type hashEquiv struct {
 	store  *hashEquivStore
 	log    *slog.Logger
 	ledger *Ledger
+	stats  hashEquivRequestStats
 }
 
 func newHashEquiv(store *hashEquivStore, log *slog.Logger, ledger *Ledger) *hashEquiv {
@@ -210,6 +212,16 @@ func (h *hashEquiv) dispatch(c heqTransport, msg map[string]json.RawMessage) err
 	if _, ok := msg["exists-stream"]; ok {
 		return h.handleStream(c, h.existsStream)
 	}
+	for _, command := range []string{"get", "get-outhash", "report", "report-equiv", "ping", "get-stats"} {
+		if _, ok := msg[command]; ok {
+			started := time.Now()
+			defer func() { h.stats.add(time.Since(started).Seconds()) }()
+			break
+		}
+	}
+	if _, ok := msg["get-stats"]; ok {
+		return c.sendMessage(map[string]any{"requests": h.stats.snapshot()})
+	}
 	if raw, ok := msg["get"]; ok {
 		return h.handleGet(c, raw)
 	}
@@ -247,10 +259,17 @@ func (h *hashEquiv) handleStream(c heqTransport, fn func(string) string) error {
 		if err != nil {
 			return err
 		}
-		if line == "" || line == "END" {
+		if line == "" {
 			break
 		}
-		if err := c.send(fn(line)); err != nil {
+		started := time.Now()
+		if line == "END" {
+			h.stats.add(time.Since(started).Seconds())
+			break
+		}
+		err = c.send(fn(line))
+		h.stats.add(time.Since(started).Seconds())
+		if err != nil {
 			return err
 		}
 	}

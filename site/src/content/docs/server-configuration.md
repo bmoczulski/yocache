@@ -39,6 +39,23 @@ returns a JSON summary of what's in the cache — file counts and sizes for
 downloads and sstate. Handy for scripting and for confirming the cache is
 actually filling up.
 
+### Hash-equivalence request statistics
+
+The hash-equivalence protocol supports BitBake's `get-stats` command on both
+the `/hashequiv` WebSocket endpoint and the raw-TCP listener. Sending
+`{"get-stats": null}` after the protocol handshake returns a `requests` object
+with `num`, `total_time`, `max_time`, `average`, and `stdev` fields. Timing
+values are in seconds; `stdev` is the sample standard deviation (zero with
+fewer than two samples).
+
+These statistics aggregate completed hash-equivalence requests across all
+connections and both transports, including individual stream messages and
+their `END` markers. Idle time waiting for requests is excluded. The response
+does not include the current `get-stats` request, which is counted once it
+finishes. Statistics are held in memory and start from zero on server restart;
+they are separate from the persistent cache inventory at `/api/stats`.
+The `reset-stats` command is not supported.
+
 ## Web dashboard
 
 Point a browser at the server (e.g. `http://yourcache.local:6768/`) to
