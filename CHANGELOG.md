@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- Hash-equivalence `get-stats` support over WebSocket and raw TCP, returning
+  BitBake-compatible server-wide request counts and timing statistics.
+
 ## v0.1.13 - 2026-09-29
 
 ### Added
