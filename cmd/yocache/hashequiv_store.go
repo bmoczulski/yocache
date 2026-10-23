@@ -150,6 +150,39 @@ func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRo
 	return unihashRows, outhashRows, tx.Commit()
 }
 
+// PruneUnbacked deletes every unihashes row whose sstate archive isn't in the
+// blobs inventory, then every outhashes row left without a unihashes row for
+// its taskhash. Lookups already ignore such entries when requireSstate is set;
+// this keeps them from piling up. Meant for startup, after the inventory has
+// been reconciled against disk and before any build can be mid-upload: at
+// runtime an entry legitimately has no archive for the moment between
+// bitbake's report and its PUT landing.
+func (s *hashEquivStore) PruneUnbacked() (unihashRows, outhashRows int64, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM unihashes WHERE NOT ` + sstateBacked("unihashes.unihash"))
+	if err != nil {
+		return 0, 0, err
+	}
+	unihashRows, _ = res.RowsAffected()
+
+	res, err = tx.Exec(`
+		DELETE FROM outhashes WHERE NOT EXISTS (
+			SELECT 1 FROM unihashes u
+			WHERE u.method = outhashes.method AND u.taskhash = outhashes.taskhash
+		)`)
+	if err != nil {
+		return unihashRows, 0, err
+	}
+	outhashRows, _ = res.RowsAffected()
+
+	return unihashRows, outhashRows, tx.Commit()
+}
+
 // unihashExists reports whether any taskhash maps to this unihash (backs
 // exists-stream).
 func (s *hashEquivStore) unihashExists(unihash string) (bool, error) {

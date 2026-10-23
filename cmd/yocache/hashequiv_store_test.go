@@ -308,3 +308,48 @@ func TestUnifiedForOuthash(t *testing.T) {
 		t.Fatalf("target with archive: %q ok=%v err=%v, want uniA", u, ok, err)
 	}
 }
+
+func TestPruneUnbacked(t *testing.T) {
+	s := newTestStore(t)
+
+	// task1 -> uniA has its archive; task2 -> uniB has only a sidecar;
+	// task3 -> uniC has nothing. Each also owns an outhash row.
+	for _, r := range []struct{ task, uni, out string }{
+		{"task1", "uniA", "out1"},
+		{"task2", "uniB", "out2"},
+		{"task3", "uniC", "out3"},
+	} {
+		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: r.out, Taskhash: r.task, Unihash: r.uni}); err != nil {
+			t.Fatalf("insertOuthash: %v", err)
+		}
+	}
+	addSstateBlob(t, s, "uniA", ".tar.zst")
+	addSstateBlob(t, s, "uniB", ".tar.zst.siginfo")
+
+	uni, out, err := s.PruneUnbacked()
+	if err != nil {
+		t.Fatalf("PruneUnbacked: %v", err)
+	}
+	if uni != 2 || out != 2 {
+		t.Fatalf("PruneUnbacked removed %d unihashes, %d outhashes; want 2, 2", uni, out)
+	}
+	if u, ok, _ := s.getEquivalent("m", "task1"); !ok || u != "uniA" {
+		t.Fatalf("backed entry: got %q ok=%v, want uniA kept", u, ok)
+	}
+	if _, ok, _ := s.getOuthash("m", "out1"); !ok {
+		t.Fatal("backed entry's outhash row was removed")
+	}
+	for _, task := range []string{"task2", "task3"} {
+		if _, ok, _ := s.getEquivalent("m", task); ok {
+			t.Fatalf("%s: unbacked entry survived", task)
+		}
+	}
+	for _, out := range []string{"out2", "out3"} {
+		if _, ok, _ := s.getOuthash("m", out); ok {
+			t.Fatalf("%s: outhash row of unbacked entry survived", out)
+		}
+	}
+}

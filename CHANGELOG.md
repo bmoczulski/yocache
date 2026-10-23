@@ -10,7 +10,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   a unihash whose sstate archive is missing. Each such answer made bitbake
   re-check the sstate mirror for everything downstream of that task (another
   "Checking sstate mirror object availability" pass after each recipe), only
-  to rebuild it all anyway.
+  to rebuild it all anyway. Such entries are also removed at startup.
 
 ## v0.1.16 - 2026-11-10
 

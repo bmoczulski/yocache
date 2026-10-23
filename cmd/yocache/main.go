@@ -201,6 +201,16 @@ func main() {
 	}
 	log.Info("inventory reconcile complete", "removed", removed)
 
+	// With the inventory now matching disk, drop hash-equivalence entries
+	// whose archive is gone so they stop accumulating (lookups already skip
+	// them).
+	heUni, heOut, err := store.PruneUnbacked()
+	if err != nil {
+		log.Error("hashequiv prune failed", "err", err)
+		os.Exit(1)
+	}
+	log.Info("hashequiv prune complete", "unihashes_removed", heUni, "outhashes_removed", heOut)
+
 	// Build the eviction manager from --evict flags.
 	var policies []EvictionPolicy
 	for _, name := range evictPolicies {
