@@ -220,3 +220,91 @@ func TestStats(t *testing.T) {
 		t.Errorf("Stats() = %+v, want %+v", *got, *want)
 	}
 }
+
+// addSstateBlob records an sstate blob for unihash in the inventory the store
+// shares its DB with. suffix picks the group member: ".tar.zst" for the
+// archive, ".tar.zst.siginfo" for a sidecar.
+func addSstateBlob(t *testing.T, s *hashEquivStore, unihash, suffix string) {
+	t.Helper()
+	path := "ab/cd/sstate:pn:arch:1.0:r0:arch:14:" + unihash + "_populate_sysroot" + suffix
+	if err := openBlobInventory(s.db).Upsert("sstate", path, 1, "", -1); err != nil {
+		t.Fatalf("Upsert %s: %v", path, err)
+	}
+}
+
+func TestRequireSstateGatesLookups(t *testing.T) {
+	s := newTestStore(t)
+	s.requireSstate = true
+
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	if _, ok, err := s.getEquivalent("m", "task1"); err != nil || ok {
+		t.Fatalf("no archive: getEquivalent ok=%v err=%v, want miss", ok, err)
+	}
+	if ok, err := s.unihashExists("uniA"); err != nil || ok {
+		t.Fatalf("no archive: unihashExists ok=%v err=%v, want false", ok, err)
+	}
+
+	// A sidecar alone can't be restored from, so it doesn't count.
+	addSstateBlob(t, s, "uniA", ".tar.zst.siginfo")
+	if _, ok, err := s.getEquivalent("m", "task1"); err != nil || ok {
+		t.Fatalf("siginfo only: getEquivalent ok=%v err=%v, want miss", ok, err)
+	}
+
+	addSstateBlob(t, s, "uniA", ".tar.zst")
+	if u, ok, err := s.getEquivalent("m", "task1"); err != nil || !ok || u != "uniA" {
+		t.Fatalf("archive stored: getEquivalent %q ok=%v err=%v, want uniA", u, ok, err)
+	}
+	if ok, err := s.unihashExists("uniA"); err != nil || !ok {
+		t.Fatalf("archive stored: unihashExists ok=%v err=%v, want true", ok, err)
+	}
+}
+
+func TestRequireSstateInsertReplacesUnbackedWinner(t *testing.T) {
+	s := newTestStore(t)
+	s.requireSstate = true
+
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	// uniA has no archive, so a later report's unihash takes over.
+	got, err := s.insertUnihash("m", "task1", "uniB")
+	if err != nil || got != "uniB" {
+		t.Fatalf("unbacked winner: got %q err=%v, want uniB", got, err)
+	}
+	// Once uniB's archive is stored, first-write-wins applies again.
+	addSstateBlob(t, s, "uniB", ".tar.zst")
+	got, err = s.insertUnihash("m", "task1", "uniC")
+	if err != nil || got != "uniB" {
+		t.Fatalf("backed winner: got %q err=%v, want uniB", got, err)
+	}
+}
+
+func TestUnifiedForOuthash(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+		t.Fatalf("insertOuthash: %v", err)
+	}
+
+	// The taskhash that owns the outhash row has nothing to unify with.
+	if _, ok, err := s.unifiedForOuthash("m", "out1", "task1"); err != nil || ok {
+		t.Fatalf("own row: ok=%v err=%v, want miss", ok, err)
+	}
+	if u, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
+		t.Fatalf("other taskhash: %q ok=%v err=%v, want uniA", u, ok, err)
+	}
+
+	s.requireSstate = true
+	if _, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || ok {
+		t.Fatalf("target without archive: ok=%v err=%v, want miss", ok, err)
+	}
+	addSstateBlob(t, s, "uniA", ".tar.zst")
+	if u, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
+		t.Fatalf("target with archive: %q ok=%v err=%v, want uniA", u, ok, err)
+	}
+}

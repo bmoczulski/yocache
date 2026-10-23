@@ -402,17 +402,16 @@ func (h *hashEquiv) handleReport(raw json.RawMessage) any {
 	}
 
 	// Cross-output equivalence: outhashes is first-write-wins per (method,
-	// outhash), so if a lookup now finds a *different* taskhash than ours
-	// sitting on this outhash, that earlier taskhash's outhash arrived first —
-	// its unihash is what should be in effect for us too. Otherwise (no prior
-	// row, or the row is the one we just inserted for our own taskhash) there
-	// is nothing to unify with yet, so fall through to our own reported
-	// unihash.
+	// outhash), so if a *different* taskhash than ours sits on this outhash,
+	// its output arrived first — its unihash is what should be in effect for
+	// us too. Otherwise (no prior row, the row is our own, or the store won't
+	// vouch for it because its sstate archive is gone) there is nothing to
+	// unify with, so fall through to our own reported unihash.
 	reportUnihash := req.Unihash
-	if rec, ok, err := h.store.getOuthash(req.Method, req.Outhash); err != nil {
+	if u, ok, err := h.store.unifiedForOuthash(req.Method, req.Outhash, req.Taskhash); err != nil {
 		h.log.Warn("hashequiv: outhash lookup failed", "err", err, "method", req.Method)
-	} else if ok && rec.Taskhash != req.Taskhash {
-		reportUnihash = rec.Unihash
+	} else if ok {
+		reportUnihash = u
 	}
 
 	// On a write failure, fall back to the reported unihash so the build

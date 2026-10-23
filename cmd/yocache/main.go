@@ -136,7 +136,7 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("operational db ready", "path", dbPath)
-	store := &hashEquivStore{db: db}
+	store := &hashEquivStore{db: db, requireSstate: true}
 	inv := openBlobInventory(db)
 
 	ledger, err := openLedger(ledgerPath, log)

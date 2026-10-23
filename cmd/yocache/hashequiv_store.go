@@ -37,6 +37,32 @@ import (
 // use by many goroutines at once.
 type hashEquivStore struct {
 	db *sql.DB
+
+	// requireSstate limits every answer to unihashes whose sstate archive this
+	// server stores (per the blobs inventory). Without it, an entry whose
+	// archive is gone (evicted before hash-equivalence GC existed, deleted by
+	// hand, or never uploaded because the PUT failed — bitbake reports hash
+	// equivalence before it even creates the archive) still redirects a build
+	// onto that unihash. Bitbake then rehashes and rechecks everything
+	// downstream of the task, only to miss on all of it and rebuild anyway.
+	requireSstate bool
+}
+
+// sstateBacked is an SQL condition that holds when the unihash in column col
+// has its sstate archive in the blobs inventory. A group left with only its
+// .siginfo/.sig sidecars doesn't count: bitbake can't restore from those.
+func sstateBacked(col string) string {
+	return `EXISTS (SELECT 1 FROM blobs b WHERE b.kind = 'sstate' AND b.checksum = ` + col +
+		` AND b.path NOT LIKE '%.siginfo' AND b.path NOT LIKE '%.sig')`
+}
+
+// backedFilter returns " AND <sstateBacked(col)>" when requireSstate is set,
+// else "".
+func (s *hashEquivStore) backedFilter(col string) string {
+	if !s.requireSstate {
+		return ""
+	}
+	return " AND " + sstateBacked(col)
 }
 
 // DB returns the underlying connection pool so other stores (e.g. blobInventory)
@@ -49,7 +75,8 @@ func (s *hashEquivStore) DB() *sql.DB { return s.db }
 func (s *hashEquivStore) getEquivalent(method, taskhash string) (string, bool, error) {
 	var u string
 	err := s.db.QueryRow(
-		`SELECT unihash FROM unihashes WHERE method = ? AND taskhash = ?`,
+		`SELECT unihash FROM unihashes WHERE method = ? AND taskhash = ?`+
+			s.backedFilter("unihashes.unihash"),
 		method, taskhash,
 	).Scan(&u)
 	switch {
@@ -61,15 +88,21 @@ func (s *hashEquivStore) getEquivalent(method, taskhash string) (string, bool, e
 	return u, true, nil
 }
 
-// insertUnihash records (method, taskhash) -> unihash first-write-wins (INSERT OR
-// IGNORE), then reads back the value now in effect — the just-inserted one, or
-// the earlier winner if another report got there first. Rows are never updated or
-// deleted, so the read-after-insert always returns the durable winner without a
-// wrapping transaction.
+// insertUnihash records (method, taskhash) -> unihash first-write-wins, then
+// reads back the value now in effect — the just-inserted one, or the earlier
+// winner if another report got there first. With requireSstate, an earlier
+// winner whose archive is gone loses to the new value instead: keeping it
+// would hand the build a unihash it can't restore from. The read-after-insert
+// needs no wrapping transaction: a row only changes away from an unbacked
+// unihash, so whatever it reads is the durable answer.
 func (s *hashEquivStore) insertUnihash(method, taskhash, unihash string) (string, error) {
+	onConflict := `DO NOTHING`
+	if s.requireSstate {
+		onConflict = `DO UPDATE SET unihash = excluded.unihash WHERE NOT ` + sstateBacked("unihashes.unihash")
+	}
 	if _, err := s.db.Exec(
 		`INSERT INTO unihashes (method, taskhash, unihash) VALUES (?, ?, ?)
-		 ON CONFLICT (method, taskhash) DO NOTHING`,
+		 ON CONFLICT (method, taskhash) `+onConflict,
 		method, taskhash, unihash,
 	); err != nil {
 		return "", err
@@ -122,7 +155,8 @@ func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRo
 func (s *hashEquivStore) unihashExists(unihash string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM unihashes WHERE unihash = ?)`,
+		`SELECT EXISTS (SELECT 1 FROM unihashes WHERE unihash = ?`+
+			s.backedFilter("unihashes.unihash")+`)`,
 		unihash,
 	).Scan(&exists)
 	if err != nil {
@@ -159,6 +193,31 @@ func (s *hashEquivStore) Stats() (*hashEquivStats, error) {
 		return nil, fmt.Errorf("hashequiv stats outhashes: %w", err)
 	}
 	return st, nil
+}
+
+// unifiedForOuthash returns the unihash in effect for the earlier, different
+// taskhash that first reported (method, outhash) — the cross-output
+// equivalence target for taskhash, as in bitbake's get_equivalent_for_outhash.
+// It reads that taskhash's current unihashes row rather than the unihash
+// stored on the outhash row, so it follows any later repair of that row. With
+// requireSstate the target must have its archive stored; otherwise ok is false
+// and the caller keeps its own unihash.
+func (s *hashEquivStore) unifiedForOuthash(method, outhash, taskhash string) (string, bool, error) {
+	var u string
+	err := s.db.QueryRow(
+		`SELECT u.unihash FROM outhashes o
+		 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
+		 WHERE o.method = ? AND o.outhash = ? AND o.taskhash != ?`+
+			s.backedFilter("u.unihash"),
+		method, outhash, taskhash,
+	).Scan(&u)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	return u, true, nil
 }
 
 // getOuthash returns the record stored for (method, outhash).
