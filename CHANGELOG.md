@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `--hash-equivalence on|off|only` (`YOCACHE_HASH_EQUIVALENCE`): `on`
+  (default) ties hash equivalence to the sstate stored on this server, `off`
+  turns it off, `only` serves hash equivalence alone, for sstate kept
+  elsewhere.
+
 ### Fixed
 - No more sstate re-check avalanche: hash equivalence no longer answers with
   a unihash whose sstate archive is missing. Each such answer made bitbake

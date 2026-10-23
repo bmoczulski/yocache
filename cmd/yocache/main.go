@@ -73,6 +73,7 @@ type sstateMeta struct {
 func main() {
 	addr := flag.String("addr", ":6768", "address the HTTP server listens on")
 	hashEquivTCPAddr := flag.String("hashequiv-addr", ":6767", "address the raw-TCP OEHASHEQUIV listener binds; empty disables it")
+	hashEquivMode := flag.String("hash-equivalence", "on", "hash-equivalence `mode`: on (only advertise unihashes whose sstate archive is stored here), off (no hash-equivalence listeners), only (hash equivalence without checking archives; all blob requests are refused)")
 	dataDir := flag.String("data-dir", "var", "root directory for all persistent state: operational database, blob stores, and audit logs")
 	quotaStr := flag.String("quota", "0", "total storage quota for all blob stores (e.g. 500MiB, 10GB); 0 means unlimited")
 	buildStatsTTL := flag.Duration("build-stats-ttl", 30*24*time.Hour, "how long to retain per-build download stats before garbage collection (Go duration syntax, e.g. 720h)")
@@ -100,6 +101,17 @@ func main() {
 		os.Exit(1)
 	}
 	quotaBytes := int64(quotaUint)
+
+	switch *hashEquivMode {
+	case "on", "off", "only":
+	default:
+		fmt.Fprintf(os.Stderr, "invalid --hash-equivalence value %q: want on, off or only\n", *hashEquivMode)
+		os.Exit(1)
+	}
+	// "on" ties hash equivalence to this server's own sstate store. "only" is
+	// for a deployment whose sstate lives elsewhere (a shared SSTATE_DIR,
+	// another mirror), so archive presence here says nothing about an entry.
+	requireSstate := *hashEquivMode == "on"
 
 	blockList := newRecipeBlockList(blockListRecipes)
 
@@ -136,7 +148,7 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("operational db ready", "path", dbPath)
-	store := &hashEquivStore{db: db, requireSstate: true}
+	store := &hashEquivStore{db: db, requireSstate: requireSstate}
 	inv := openBlobInventory(db)
 
 	ledger, err := openLedger(ledgerPath, log)
@@ -204,12 +216,14 @@ func main() {
 	// With the inventory now matching disk, drop hash-equivalence entries
 	// whose archive is gone so they stop accumulating (lookups already skip
 	// them).
-	heUni, heOut, err := store.PruneUnbacked()
-	if err != nil {
-		log.Error("hashequiv prune failed", "err", err)
-		os.Exit(1)
+	if requireSstate {
+		heUni, heOut, err := store.PruneUnbacked()
+		if err != nil {
+			log.Error("hashequiv prune failed", "err", err)
+			os.Exit(1)
+		}
+		log.Info("hashequiv prune complete", "unihashes_removed", heUni, "outhashes_removed", heOut)
 	}
-	log.Info("hashequiv prune complete", "unihashes_removed", heUni, "outhashes_removed", heOut)
 
 	// Build the eviction manager from --evict flags.
 	var policies []EvictionPolicy
@@ -304,8 +318,11 @@ func main() {
 	// below, over raw TCP on --hashequiv-addr for pre-Scarthgap bitbake, which
 	// has no ws:// client. See hashequiv.go for the protocol and the (thin,
 	// in-memory) store.
+	log.Info("hash equivalence", "mode", *hashEquivMode)
 	he := newHashEquiv(store, log, ledger)
-	mux.HandleFunc("/hashequiv", he.handle)
+	if *hashEquivMode != "off" {
+		mux.HandleFunc("/hashequiv", he.handle)
+	}
 
 	// Build telemetry sink. Nothing on the client side calls this anymore —
 	// yocache.bbclass dropped its per-event report/POST (it never persisted
@@ -389,6 +406,13 @@ func main() {
 	blobStores := map[string]*blobUploader{"sstate": sstate, "downloads": downloads}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		identity, kind, blobName, ok := parseIdentityPath(r.URL.Path)
+		if ok && *hashEquivMode == "only" {
+			// No blob service in this mode. A plain 404 reads as a cache miss
+			// to bitbake's mirror fetches; not logged per request, since a
+			// misconfigured build would send one for every artifact.
+			http.NotFound(w, r)
+			return
+		}
 		if ok && blockList.blocked(kind, blobName) {
 			log.Warn("blocked recipe",
 				"kind", kind, "name", blobName, "method", r.Method, "remote", r.RemoteAddr)
@@ -478,7 +502,7 @@ func main() {
 	// Raw-TCP OEHASHEQUIV listener, a second port for pre-Scarthgap bitbake
 	// (see hashequiv_tcp.go). Opt out with --hashequiv-addr "".
 	var heTCP *heqTCPServer
-	if *hashEquivTCPAddr != "" {
+	if *hashEquivTCPAddr != "" && *hashEquivMode != "off" {
 		ln, err := net.Listen("tcp", *hashEquivTCPAddr)
 		if err != nil {
 			log.Error("cannot start hashequiv TCP listener", "addr", *hashEquivTCPAddr, "err", err)
