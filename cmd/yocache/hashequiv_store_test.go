@@ -112,7 +112,7 @@ func countOuthashRows(t *testing.T, s *hashEquivStore, outhash string) int {
 	return n
 }
 
-func TestDeleteByUnihash(t *testing.T) {
+func TestEvictUnihash(t *testing.T) {
 	s := newTestStore(t)
 
 	// Two taskhashes unified onto the same unihash (cross-output equivalence),
@@ -137,9 +137,9 @@ func TestDeleteByUnihash(t *testing.T) {
 		t.Fatalf("insertOuthash task3: %v", err)
 	}
 
-	unihashRows, outhashRows, err := s.DeleteByUnihash("uniA")
+	_, unihashRows, outhashRows, err := s.EvictUnihash("uniA")
 	if err != nil {
-		t.Fatalf("DeleteByUnihash: %v", err)
+		t.Fatalf("EvictUnihash: %v", err)
 	}
 	if unihashRows != 2 {
 		t.Errorf("unihashRows = %d, want 2", unihashRows)
@@ -149,16 +149,16 @@ func TestDeleteByUnihash(t *testing.T) {
 	}
 
 	if _, ok, _ := s.getEquivalent("m", "task1"); ok {
-		t.Error("task1 unihash survived DeleteByUnihash")
+		t.Error("task1 unihash survived EvictUnihash")
 	}
 	if _, ok, _ := s.getEquivalent("m", "task2"); ok {
-		t.Error("task2 unihash survived DeleteByUnihash")
+		t.Error("task2 unihash survived EvictUnihash")
 	}
 	if n := countOuthashRows(t, s, "out1"); n != 0 {
-		t.Errorf("out1: %d outhash rows survived DeleteByUnihash", n)
+		t.Errorf("out1: %d outhash rows survived EvictUnihash", n)
 	}
 	if n := countOuthashRows(t, s, "out2"); n != 0 {
-		t.Errorf("out2: %d outhash rows survived DeleteByUnihash", n)
+		t.Errorf("out2: %d outhash rows survived EvictUnihash", n)
 	}
 
 	// Unrelated unihash/outhash must survive.
@@ -166,18 +166,18 @@ func TestDeleteByUnihash(t *testing.T) {
 		t.Errorf("task3 unihash = %q ok=%v, want uniB/true", u, ok)
 	}
 	if n := countOuthashRows(t, s, "out3"); n != 1 {
-		t.Errorf("out3: %d outhash rows, want 1 to survive DeleteByUnihash", n)
+		t.Errorf("out3: %d outhash rows, want 1 to survive EvictUnihash", n)
 	}
 }
 
-func TestDeleteByUnihashNoMatch(t *testing.T) {
+func TestEvictUnihashNoMatch(t *testing.T) {
 	s := newTestStore(t)
-	unihashRows, outhashRows, err := s.DeleteByUnihash("nonexistent")
+	_, unihashRows, outhashRows, err := s.EvictUnihash("nonexistent")
 	if err != nil {
-		t.Fatalf("DeleteByUnihash: %v", err)
+		t.Fatalf("EvictUnihash: %v", err)
 	}
 	if unihashRows != 0 || outhashRows != 0 {
-		t.Errorf("DeleteByUnihash on empty store = (%d, %d), want (0, 0)", unihashRows, outhashRows)
+		t.Errorf("EvictUnihash on empty store = (%d, %d), want (0, 0)", unihashRows, outhashRows)
 	}
 }
 
@@ -665,5 +665,52 @@ func TestOuthashReportFields(t *testing.T) {
 	fields := outhashRecord{Owner: "builder"}.reportFields()
 	if fields["owner"] != "builder" || fields["PN"] != nil || fields["created"] != nil {
 		t.Fatalf("reportFields = %v, want owner set and the rest nil", fields)
+	}
+}
+
+func TestEvictUnihashPromotesToEquivalent(t *testing.T) {
+	s := newTestStore(t)
+	s.requireSstate = true
+
+	// out1 was reported by task1 (uniA), then task2 (uniB, no archive), then
+	// task3 (uniC, archive). task4 (uniA) produced out2, which nobody else did.
+	for _, r := range []struct{ task, uni, out string }{
+		{"task1", "uniA", "out1"},
+		{"task2", "uniB", "out1"},
+		{"task3", "uniC", "out1"},
+		{"task4", "uniA", "out2"},
+	} {
+		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: r.out, Taskhash: r.task}); err != nil {
+			t.Fatalf("insertOuthash: %v", err)
+		}
+	}
+	addSstateBlob(t, s, "uniC", ".tar.zst")
+	// uniA's archive was just evicted, so it isn't in the inventory.
+
+	promoted, unihashRows, outhashRows, err := s.EvictUnihash("uniA")
+	if err != nil {
+		t.Fatalf("EvictUnihash: %v", err)
+	}
+	want := []promotion{{Method: "m", Taskhash: "task1", Unihash: "uniC"}}
+	if len(promoted) != 1 || promoted[0] != want[0] {
+		t.Fatalf("promoted = %+v, want %+v (oldest equivalent with an archive)", promoted, want)
+	}
+	if unihashRows != 1 || outhashRows != 1 {
+		t.Fatalf("removed %d unihashes, %d outhashes; want task4's 1, 1", unihashRows, outhashRows)
+	}
+	if u, ok, _ := s.getEquivalent("m", "task1"); !ok || u != "uniC" {
+		t.Fatalf("task1 = %q ok=%v, want uniC", u, ok)
+	}
+	if n := countOuthashRows(t, s, "out1"); n != 3 {
+		t.Fatalf("out1 has %d rows, want all 3 kept", n)
+	}
+	if _, ok, _ := s.getEquivalent("m", "task4"); ok {
+		t.Fatal("task4 had no equivalent but was kept")
+	}
+	if n := countOuthashRows(t, s, "out2"); n != 0 {
+		t.Fatalf("out2 has %d rows, want task4's removed", n)
 	}
 }

@@ -119,17 +119,70 @@ func (s *hashEquivStore) insertUnihash(method, taskhash, unihash string) (string
 	return inEffect, nil
 }
 
-// DeleteByUnihash removes every unihashes/outhashes row tied to unihash.
-// Called when the sstate blob(s) backing that unihash have been fully
-// evicted: an equivalence entry pointing at a blob we no longer have would
-// otherwise cost bitbake a wasted round trip instead of an immediate,
-// correct fallback to its own taskhash.
-func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRows int64, err error) {
+// promotion is a taskhash EvictUnihash re-pointed to another unihash instead
+// of forgetting it.
+type promotion struct {
+	Method, Taskhash, Unihash string
+}
+
+// EvictUnihash updates the hash-equivalence entries of a unihash whose sstate
+// blobs have just been fully evicted (and already removed from the blobs
+// inventory). Each taskhash using it is re-pointed to the unihash of the
+// oldest other taskhash that reported one of the same outputs and still has
+// its archive (with requireSstate; otherwise any other unihash), so its next
+// lookup restores from that archive instead of rebuilding. A taskhash with no
+// such alternative is forgotten — its unihashes row and its outhashes_v2
+// rows — so it falls back to its own taskhash, and its next report counts as
+// new and gets matched again. Re-pointed taskhashes keep their outhashes_v2
+// rows: they still produced those outputs.
+func (s *hashEquivStore) EvictUnihash(unihash string) (promoted []promotion, unihashRows, outhashRows int64, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, 0, err
 	}
 	defer tx.Rollback()
+
+	// Pick replacements against the state before any of them is applied, so
+	// the order taskhashes are visited in can't change the outcome.
+	rows, err := tx.Query(`
+		SELECT t.method, t.taskhash, (
+			SELECT u.unihash FROM outhashes_v2 mine
+			JOIN outhashes_v2 o ON o.method = mine.method AND o.outhash = mine.outhash
+				AND o.taskhash != mine.taskhash
+			JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
+			WHERE mine.method = t.method AND mine.taskhash = t.taskhash
+				AND u.unihash != t.unihash`+s.backedFilter("u.unihash")+`
+			ORDER BY o.created ASC, o.id ASC
+			LIMIT 1
+		)
+		FROM unihashes t WHERE t.unihash = ?`, unihash)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	for rows.Next() {
+		var p promotion
+		var replacement sql.NullString
+		if err := rows.Scan(&p.Method, &p.Taskhash, &replacement); err != nil {
+			rows.Close()
+			return nil, 0, 0, err
+		}
+		if replacement.Valid {
+			p.Unihash = replacement.String
+			promoted = append(promoted, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, 0, err
+	}
+	rows.Close()
+
+	for _, p := range promoted {
+		if _, err := tx.Exec(`UPDATE unihashes SET unihash = ? WHERE method = ? AND taskhash = ?`,
+			p.Unihash, p.Method, p.Taskhash); err != nil {
+			return nil, 0, 0, err
+		}
+	}
 
 	// outhashes first, while the unihashes rows it joins against still exist.
 	res, err := tx.Exec(`
@@ -139,17 +192,20 @@ func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRo
 		)`, unihash,
 	)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, 0, err
 	}
 	outhashRows, _ = res.RowsAffected()
 
 	res, err = tx.Exec(`DELETE FROM unihashes WHERE unihash = ?`, unihash)
 	if err != nil {
-		return 0, outhashRows, err
+		return nil, 0, outhashRows, err
 	}
 	unihashRows, _ = res.RowsAffected()
 
-	return unihashRows, outhashRows, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, 0, 0, err
+	}
+	return promoted, unihashRows, outhashRows, nil
 }
 
 // PruneUnbacked deletes every unihashes row whose sstate archive isn't in the

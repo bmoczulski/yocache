@@ -14,6 +14,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`owner`, plus `PN`, `task`, `outhash_siginfo`, … with
   `SSTATE_HASHEQUIV_REPORT_TASKDATA = "1"`) and returns them from
   `get-outhash`.
+- Evicting an sstate archive moves its hash-equivalence entries to an
+  equivalent archive that is still cached, instead of dropping them.
 
 ### Changed
 - Hash equivalence moved to bitbake's `outhashes_v2` layout, keeping every

@@ -90,9 +90,10 @@ locations — one root, one thing to mount/back up/point a Docker volume at.
   by removing least-recently-accessed blobs, always evicting a full sstate
   group (archive + sidecars, via `blobs.checksum`) as one unit rather than
   per-file, ordered by whichever member was most recently accessed. Once a
-  group is fully evicted, its hash-equivalence entries are deleted too (see
-  `hashEquivStore.DeleteByUnihash`) — bitbake-style GC anchored to blob
-  presence rather than a separate mark-and-sweep pass. See
+  group is fully evicted, each taskhash using its unihash is moved to an
+  equivalent unihash (same output) that still has its archive, or forgotten
+  if there is none (see `hashEquivStore.EvictUnihash`) — bitbake-style GC
+  anchored to blob presence rather than a separate mark-and-sweep pass. See
   [upload.go](cmd/yocache/upload.go) (`quotaTracker`),
   [eviction.go](cmd/yocache/eviction.go), and
   [blob_inventory.go](cmd/yocache/blob_inventory.go).

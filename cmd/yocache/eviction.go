@@ -61,9 +61,11 @@ func (m *EvictionManager) TryFree(needed int64) (int64, error) {
 // entries as a project evolves and should be trimmed first, while downloads
 // are a flatter, saturating cost that's worth preserving longer.
 //
-// hashEquiv is nil-safe: when set, a fully-evicted sstate group also drops
-// its unihashes/outhashes rows (see hashEquivStore.DeleteByUnihash), so a
-// hash-equiv answer never outlives the blob it points at.
+// hashEquiv is nil-safe: when set, a fully-evicted sstate group also updates
+// the hash-equiv entries of its unihash (see hashEquivStore.EvictUnihash):
+// each taskhash moves to an equivalent unihash that still has its archive, or
+// is forgotten if there is none, so a hash-equiv answer never outlives the
+// blob it points at.
 type LRUPolicy struct {
 	inventory *blobInventory
 	stores    map[string]string // kind → abs root dir
@@ -161,8 +163,14 @@ func (p *LRUPolicy) evictGroup(g blobGroup) int64 {
 
 	if clear && g.Kind == "sstate" && p.hashEquiv != nil && len(g.Members) > 0 {
 		if checksum := sstateChecksum(g.Members[0].Path); checksum != "" {
-			if _, _, err := p.hashEquiv.DeleteByUnihash(checksum); err != nil {
+			promoted, _, _, err := p.hashEquiv.EvictUnihash(checksum)
+			if err != nil {
 				p.log.Warn("lru evict: hash-equiv cleanup failed", "checksum", checksum, "err", err)
+			}
+			for _, pr := range promoted {
+				p.log.Info("lru evict: hash-equiv entry moved to an equivalent unihash",
+					"taskhash", short(pr.Taskhash), "from", short(checksum), "to", short(pr.Unihash))
+				p.ledger.RecordHashEquivSet(pr.Method, pr.Taskhash, pr.Unihash, "")
 			}
 		}
 	}

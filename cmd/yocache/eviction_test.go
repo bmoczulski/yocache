@@ -370,6 +370,48 @@ func TestLRUPolicyEvictCleansUpHashEquiv(t *testing.T) {
 	}
 }
 
+func TestLRUPolicyEvictPromotesHashEquivToEquivalent(t *testing.T) {
+	dir := t.TempDir()
+	qt := &quotaTracker{limit: 10000}
+	inv, db := newTestInventory(t)
+	hstore := &hashEquivStore{db: db, requireSstate: true}
+
+	// Two archives of the same task output under different unihashes; the
+	// older-accessed one gets evicted.
+	oldPath := "sstate:ninja-native::1.13.2:r0::14:aaaa_patch.tar.zst"
+	keepPath := "sstate:ninja-native::1.13.2:r0::14:bbbb_patch.tar.zst"
+	writeTestBlob(t, dir, oldPath, make([]byte, 100))
+	writeTestBlob(t, dir, keepPath, make([]byte, 100))
+	insertBlobAt(t, db, "sstate", oldPath, 100, 100)
+	insertBlobAt(t, db, "sstate", keepPath, 100, 200)
+	qt.used.Store(200)
+
+	for _, r := range []struct{ task, uni string }{{"task1", "aaaa"}, {"task2", "bbbb"}} {
+		if _, err := hstore.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		if _, err := hstore.insertOuthash(outhashRecord{Method: "m", Outhash: "out", Taskhash: r.task}); err != nil {
+			t.Fatalf("insertOuthash: %v", err)
+		}
+	}
+
+	p := &LRUPolicy{
+		inventory: inv,
+		stores:    map[string]string{"sstate": dir},
+		quota:     qt,
+		hashEquiv: hstore,
+		log:       slog.Default(),
+		kind:      "sstate",
+	}
+	if _, err := p.Evict(50); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+
+	if u, ok, _ := hstore.getEquivalent("m", "task1"); !ok || u != "bbbb" {
+		t.Fatalf("task1 = %q ok=%v after evicting aaaa, want moved to bbbb", u, ok)
+	}
+}
+
 // TestLRUPolicyEvictPartialFailureLeavesGroupAndHashEquivIntact makes one
 // sibling in a group undeletable (a non-empty directory in its place, so
 // os.Remove fails with a real error, not ErrNotExist) and confirms the
