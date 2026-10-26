@@ -1,0 +1,267 @@
+# AGENTS.md
+
+This file provides guidance to AI coding agents (Claude Code, Codex, Cursor, and others) when working with code in this repository.
+
+## What this is
+
+`yocache` is a smart, writable cache server for Yocto/bitbake build farms: a
+shared **DL mirror + sstate cache** with built-in **hash-equivalence**, and
+mDNS discovery + peer federation planned. A single-node cache now works
+end-to-end — bitbake uploads artifacts on a cache miss and every machine fetches
+them back. `notes/concept.md` is the long-form design dialogue and the
+authoritative source for *why* decisions were made; read it before proposing
+architectural changes.
+
+Status: single-node sstate+DL+hash-equiv is functional. Not yet built: mDNS/
+DNS-SD discovery (`_yocache._tcp`), peer gossip + pull, and full federation.
+Build order is single-node → mDNS → peer pull → federation.
+
+## The two halves
+
+The repo contains both sides of the system, which communicate **over HTTP and
+WebSocket on port 6768**:
+
+- **Server** — the Go binary under [cmd/yocache/](cmd/yocache/). Endpoints:
+  - `GET /healthz`, `GET /version` — liveness + build stamp.
+  - `GET /api/stats` — JSON cache inventory summary (file counts, deduplicated
+    sstate recipe count, cumulative size per category), computed live from the
+    inventory DB. Same data backs the "cache inventory" log line at startup;
+    both are built by [stats.go](cmd/yocache/stats.go).
+  - `POST /api/build-report` — decodes-and-logs one JSON telemetry payload per
+    bitbake event (no persistence yet; proves the round trip and shows payload
+    shape). The Go `buildReport` struct in [main.go](cmd/yocache/main.go)
+    mirrors the bbclass JSON by hand.
+  - `/hashequiv` — bitbake hash-equivalence protocol over **WebSocket**
+    ([hashequiv.go](cmd/yocache/hashequiv.go) + SQLite-backed
+    [hashequiv_store.go](cmd/yocache/hashequiv_store.go)).
+  - catch-all `/` — the blob store ([upload.go](cmd/yocache/upload.go)),
+    handling `GET`/`HEAD` (serve or 404-miss so bitbake falls back to upstream)
+    and `PUT` (upload) for both `/sstate/…` and `/downloads/…`. This is the
+    headline feature: **bitbake has no built-in sstate/DL upload path**, which is
+    the gap this project bridges.
+- **Build-side layer** — [meta-yocache/](meta-yocache/), enabled with
+  `INHERIT += "yocache"`. Two jobs:
+  - [classes/yocache.bbclass](meta-yocache/classes/yocache.bbclass) wires the
+    mirrors: it prepends `PREMIRRORS` and `SSTATE_MIRRORS` from `YOCACHE_URL`
+    (see the mirror `.inc` files —
+    [yocache-mirrors-new.inc](meta-yocache/classes/yocache-mirrors-new.inc) and
+    the compat variant — chosen by the running bitbake's capabilities), and
+    manages the uploader's lifecycle (`yocache_build_lifecycle`, on
+    `BuildStarted`/`BuildCompleted`), including the end-of-build "yocache
+    summary" line sourced from `GET /api/build-stats`.
+  - [lib/yocache/uploader.py](meta-yocache/lib/yocache/uploader.py) is a
+    cooker-resident uploader thread. `SSTATEPOSTCREATEFUNCS` /
+    `do_fetch[postfuncs]` hooks notify it over a unix socket, and it `PUT`s each
+    blob to the server. See [notes/sstate-upload-hook.md](notes/sstate-upload-hook.md).
+
+  There used to be a third job — POSTing one JSON payload per bitbake event to
+  `POST /api/build-report` — removed because the server never persisted any of
+  it (see the handler's comment in [main.go](cmd/yocache/main.go)) and two of
+  the events it fed only fired with `INHERIT += "toaster"`, which is why that
+  used to be part of the recommended setup and no longer is. The server
+  endpoint and the `buildReport` struct are kept in case this is reinstated
+  with a real consumer.
+
+## Storage & persistence
+
+All persistent state nests under one root, `--data-dir` (default `var`):
+the operational database (`yocache.db`), the two blob stores (`downloads/`,
+`sstate/`), and the two audit logs (`yocache.ledger.jsonl`,
+`yocache.access.jsonl`). There is no way to split them across separate
+locations — one root, one thing to mount/back up/point a Docker volume at.
+
+- **Blobs** live on the filesystem under `<data-dir>/downloads` and
+  `<data-dir>/sstate`. Uploads are crash- and reader-safe: the body is
+  streamed to a private `.uploads/<token>/` staging dir and atomically
+  `rename(2)`d into place only after a full, fsync'd write. `PUT` requires
+  `If-None-Match` and `Content-Length`; a same-size existing blob is skipped
+  (`412`), a size mismatch is a `409` conflict — except growing VCS mirror
+  tarballs (`git2_`/`gitshallow_`/`hg_`/`repo_`), which are allowed to replace a
+  smaller stored snapshot.
+- **Operational state** is a single **SQLite (WAL)** database at
+  `<data-dir>/yocache.db` shared by all stores. Schema lives in
+  [cmd/yocache/migrations/](cmd/yocache/migrations/) and is applied at startup by
+  goose (`//go:embed`). Tables: `unihashes`/`outhashes` (hash-equiv) and `blobs`
+  (per-blob size + `accessed_at`, the source of truth for eviction order, plus
+  `checksum` — the sstate content hash an archive shares with its
+  `.siginfo`/`.sig` sidecars, NULL for downloads).
+- **Quota + eviction**: `--quota` (e.g. `500MiB`, `0` = unlimited) caps total
+  blob bytes; `--evict lru` (repeatable to chain policies) frees space on demand
+  by removing least-recently-accessed blobs, always evicting a full sstate
+  group (archive + sidecars, via `blobs.checksum`) as one unit rather than
+  per-file, ordered by whichever member was most recently accessed. Once a
+  group is fully evicted, its hash-equivalence entries are deleted too (see
+  `hashEquivStore.DeleteByUnihash`) — bitbake-style GC anchored to blob
+  presence rather than a separate mark-and-sweep pass. See
+  [upload.go](cmd/yocache/upload.go) (`quotaTracker`),
+  [eviction.go](cmd/yocache/eviction.go), and
+  [blob_inventory.go](cmd/yocache/blob_inventory.go).
+- **Two JSONL audit logs** (append-only, jq/DuckDB-friendly — see
+  [ledger.go](cmd/yocache/ledger.go)): the **ledger**
+  (`<data-dir>/yocache.ledger.jsonl`) records server state mutations
+  (`artifact.added`, `artifact.evicted`, `quota.exceeded`, `hash.equiv_set`);
+  the **access log** (`<data-dir>/yocache.access.jsonl`) records
+  `artifact.fetched` / `artifact.missed`. Both are drained by a dedicated
+  goroutine so a slow/full log never stalls a request.
+- **DuckDB** (or `jq`) works well for ad-hoc offline analysis of these JSONL
+  logs; neither is used as a live store.
+
+Planned but not yet built: mDNS/DNS-SD discovery, peer gossip/pull, federation.
+
+## Identity-prefixed URLs & the recipe block list
+
+GET/HEAD accept both direct (`/sstate/<blob>`) and identity-prefixed
+(`/machine/<m>/buildname/<b>/sstate/<blob>`) URLs so the access log captures which
+build/machine issued the lookup; `parseIdentityPath` extracts it. PUT sends
+direct paths and carries identity in `X-BitBake-var-*` headers instead. The
+`--block-recipe <PN>` flag (repeatable) rejects all cache ops for a recipe known
+to produce broken sstate ([blocklist.go](cmd/yocache/blocklist.go)); it matches
+the `sstate:<PN>:…` filename pattern and never affects downloads.
+
+## Development
+
+There is **no local Go toolchain**; everything runs in the container defined in
+[.devcontainer/Dockerfile](.devcontainer/Dockerfile) (Go 1.26). The container
+**must run as the host uid/gid** so bind-mounted files aren't root-owned and
+git's `.git` ownership check passes (which keeps `go build` VCS stamping working).
+Use a rootless engine, or pass `--user` explicitly with rootful Docker.
+
+Helper scripts wrap the container invocations (rootless Podman by default):
+
+```sh
+./build.sh   # go build + go vet + go test -race, all ./cmd/... inside the container
+./shell.sh   # interactive shell in the toolchain container
+./serve.sh   # run the locally-built ./yocache binary (--evict lru)
+```
+
+Or drive the container directly (for rootful Docker swap `--userns=keep-id` for
+`--user "$(id -u):$(id -g)"`):
+
+```sh
+docker build -t yocache-dev .devcontainer            # build toolchain image once
+podman run --rm -it --userns=keep-id -v "$PWD":/workspace -w /workspace yocache-dev go build ./...
+podman run --rm -it --userns=keep-id -p 6768:6768 -v "$PWD":/workspace -w /workspace yocache-dev \
+  go run ./cmd/yocache --addr :6768
+```
+
+Module/build caches persist under `./.cache` (git-ignored), so rebuilds are fast.
+Tests live alongside the code (`*_test.go` in [cmd/yocache/](cmd/yocache/)); run a
+single one with `go test -race -run TestName ./cmd/yocache`.
+
+## Exercising the cache against a real build
+
+[testdata/yocto/](testdata/yocto/) is a reproducible kas-based Yocto build used
+to drive real traffic at the server. **Run the Yocto build via `kas-container` on
+the host, not inside the Go devcontainer** — yocache runs separately and they
+talk only over HTTP. See [testdata/yocto/README.md](testdata/yocto/README.md) for
+the full flow. For fast turnaround,
+[docs/cheap-build-targets.md](docs/cheap-build-targets.md) ranks targets for
+both situations: cheap ones to build from a cold tree (e.g. `quilt-native`),
+and ones that are safe to force-rebuild on a warm tree without cascading.
+
+### Running ad-hoc commands inside the build environment
+
+To exercise yocache against bitbake's *own* client code (e.g. the hash-equiv
+protocol) without a full build, run a one-off command in the kas-container, which
+already has bitbake's libs on `PYTHONPATH` and `websockets` installed. From
+`testdata/yocto/example-project`:
+
+```sh
+KAS_IMAGE_VERSION=5.2 KAS_CONTAINER_ENGINE=podman \
+  ../bin/kas-container-5.2 --runtime-args "--network=host" \
+  shell yocache.yml -c "python3 /work/_some_script.py"
+```
+
+`--network=host` lets the command reach a yocache server bound on the host at
+`localhost:6768`. Path mapping inside the container: the kasfile's git repo (the
+yocache repo root) is `/repo`, and `KAS_WORK_DIR` (i.e. `example-project`, the dir
+you run from) is `/work` — so `testdata/yocto/example-project/foo.py` is
+`/work/foo.py` inside. `import hashserv` / `import bb` resolve from the sourced
+bitbake env (fallback: `/work/bitbake/lib`).
+
+### Hash-equivalence (`BB_HASHSERVE` over WebSocket)
+
+yocache speaks bitbake's hash-equivalence protocol ("OEHASHEQUIV" over
+`bb.asyncrpc`) natively over **WebSocket**, on the same port 6768, at
+`/hashequiv`. `yocache.bbclass` sets `BB_HASHSERVE` itself, via a weak
+(`??=`) default derived from `YOCACHE_URL` — `ws://<host>/hashequiv` on
+Yocto ≥ Scarthgap, else the raw-TCP fallback (`<host>:6767`) for older
+releases whose bitbake has no `ws://` client. A global `INHERIT`-ed class
+*can* set a variable the cooker reads at startup this way — it lands in the
+same base datastore `cooker.py` reads from, ahead of any base-config `??=`
+(bitbake.conf's own `BB_HASHSERVE ??= "auto"` included) since the class
+parses later; only an actual `=`/`?=` anywhere beats it, checked by presence
+of real content rather than parse order. Verified with `bitbake-getvar
+BB_HASHSERVE` in the kas-container against `testdata/yocto/example-project`.
+Override it yourself in `local.conf`/`site.conf` only if you want something
+other than this server's own endpoint:
+
+```
+BB_HASHSERVE = "ws://localhost:6768/hashequiv"
+```
+
+The store is **SQLite-backed** (survives restart, which matters — a shifting
+unihash across a restart changes dependent taskhashes and trips bitbake's
+StaleSetSceneTasks). It does **cross-output equivalence dedup**: a reported
+`outhash` that matches an earlier taskhash's `outhash` unifies onto that
+taskhash's unihash (mirroring bitbake's own hashserv,
+`get_equivalent_for_outhash`) — so two taskhashes whose actual task output
+matches share a unihash even when their inputs differ, not just identical
+taskhashes across machines.
+
+`notes/` holds source-verified references (bitbake event catalogue, git mirror
+tarball shapes, build identity, sstate upload hook) backing the design — consult
+them before guessing at bitbake behaviour.
+
+## Release automation
+
+Every push to `main` that changes shippable content (i.e. not docs/notes-only)
+is auto-released: [.github/workflows/release.yml](.github/workflows/release.yml)
+runs the same test suite as `build.sh`, then cuts `CHANGELOG.md`'s `Unreleased`
+section into a new version, tags it, and publishes a GitHub Release — binaries
+for linux/darwin × amd64/arm64 via [.goreleaser.yaml](.goreleaser.yaml) (no cgo
+needed, `modernc.org/sqlite` is pure Go), plus a tarball/zip of
+[meta-yocache/](meta-yocache/). [VERSION](VERSION) holds `MAJOR.MINOR`; only the
+patch auto-increments — bump `MAJOR`/`MINOR` yourself by editing that file.
+[.github/workflows/ci.yml](.github/workflows/ci.yml) covers PRs/branches with no
+release side effects. The release job fails outright if `CHANGELOG.md` has no
+`Unreleased` entries, so see the convention below.
+
+To validate `.goreleaser.yaml` or dry-run a build locally without waiting on
+CI, use the gitignored `./goreleaser` wrapper (runs the official
+`goreleaser/goreleaser` Docker image — not a repo script, recreate it if
+missing: `./goreleaser check` or `./goreleaser release --snapshot --clean`).
+
+## Conventions
+
+- **Telemetry must never break a build.** In the bbclass, every network/parse
+  failure is caught and downgraded to `bb.warn`; keep it that way. Likewise on
+  the server, ledger/inventory failures are logged, never fatal to a request.
+- Default port is **6768** throughout (binary, bbclass, mDNS service name).
+- The bbclass is deliberately scaffolding: synchronous per-event POSTs mean
+  hundreds-to-thousands of requests per build. Batching is required before this
+  is enabled on large builds — don't treat the current shape as the target.
+- Commits: Conventional Commits, no emojis, no `Co-authored-by`; keep them small
+  and surgical (see the global instructions).
+- **Reference issues and PRs with colon-form trailers** in the commit footer:
+  `Fixes: #N` (GitHub closes it when the commit lands on `main`) or `Refs: #N`
+  (link only), never the colon-less `Fixes #N`. The colon form is at once a
+  Conventional Commits footer, a git trailer (`git interpret-trailers --parse`
+  ignores `Fixes #N`), and a GitHub closing keyword. Issues and PRs share one
+  number space per repo, so `#N` is unambiguous; use `Refs: #N` for past PRs
+  too. PRs are merged only with GitHub's "rebase and merge" (never squash), so
+  history carries no `(#N)` subject suffix.
+- **Every user-facing change needs a `CHANGELOG.md` entry** under `##
+  Unreleased`, in the same commit/PR as the change — this is what the release
+  workflow turns into GitHub Release notes (see "Release automation" above). A
+  push to `main` with no new entry fails the release job outright.
+- **Every user-facing change also needs a `site/` update**, in the same
+  commit/PR — new/changed flags in
+  [server-configuration.md](site/src/content/docs/server-configuration.md),
+  new/changed bitbake variables in
+  [client-configuration.md](site/src/content/docs/client-configuration.md),
+  and anything that changes an answer already given in
+  [faq.md](site/src/content/docs/faq.md) or the setup snippet in
+  [getting-started.md](site/src/content/docs/getting-started.md). Unlike the
+  `CHANGELOG.md` check, nothing enforces this automatically — it's on the
+  author (human or agent) to remember.
