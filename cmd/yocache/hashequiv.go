@@ -359,14 +359,16 @@ func (h *hashEquiv) handleGet(raw json.RawMessage) any {
 
 func (h *hashEquiv) handleGetOuthash(raw json.RawMessage) any {
 	var req struct {
-		Method   string `json:"method"`
-		Outhash  string `json:"outhash"`
-		Taskhash string `json:"taskhash"`
+		Method      string `json:"method"`
+		Outhash     string `json:"outhash"`
+		Taskhash    string `json:"taskhash"`
+		WithUnihash *bool  `json:"with_unihash"` // bitbake defaults it to true
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return invokeErr(err)
 	}
-	rec, ok, err := h.store.getOuthash(req.Method, req.Outhash)
+	withUnihash := req.WithUnihash == nil || *req.WithUnihash
+	rec, ok, err := h.store.getOuthash(req.Method, req.Outhash, withUnihash)
 	if err != nil {
 		h.log.Warn("hashequiv: get-outhash lookup failed", "err", err, "method", req.Method)
 		return nil
@@ -374,12 +376,15 @@ func (h *hashEquiv) handleGetOuthash(raw json.RawMessage) any {
 	if !ok {
 		return nil
 	}
-	return map[string]any{
+	resp := map[string]any{
 		"method":   rec.Method,
 		"outhash":  rec.Outhash,
 		"taskhash": rec.Taskhash,
-		"unihash":  rec.Unihash,
 	}
+	if withUnihash {
+		resp["unihash"] = rec.Unihash
+	}
+	return resp
 }
 
 func (h *hashEquiv) handleReport(raw json.RawMessage) any {

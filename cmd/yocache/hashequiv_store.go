@@ -269,18 +269,34 @@ func (s *hashEquivStore) equivalentForOuthash(method, outhash, taskhash string) 
 	return u, true, nil
 }
 
-// getOuthash returns the oldest report of (method, outhash), with the unihash
-// currently in effect for its taskhash (bitbake's get_unihash_by_outhash).
-func (s *hashEquivStore) getOuthash(method, outhash string) (outhashRecord, bool, error) {
+// getOuthash returns the oldest report of (method, outhash). With withUnihash
+// (bitbake's get_unihash_by_outhash) it only considers reports whose taskhash
+// has a unihash, fills rec.Unihash with it, and with requireSstate skips those
+// whose archive is gone — another hash server using this one as its upstream
+// adopts that unihash. Without it (bitbake's get_outhash), it is the plain
+// oldest report and rec.Unihash stays empty.
+func (s *hashEquivStore) getOuthash(method, outhash string, withUnihash bool) (outhashRecord, bool, error) {
 	rec := outhashRecord{Method: method, Outhash: outhash}
-	err := s.db.QueryRow(
-		`SELECT o.taskhash, u.unihash FROM outhashes_v2 o
-		 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
-		 WHERE o.method = ? AND o.outhash = ?
-		 ORDER BY o.created ASC, o.id ASC
-		 LIMIT 1`,
-		method, outhash,
-	).Scan(&rec.Taskhash, &rec.Unihash)
+	var err error
+	if withUnihash {
+		err = s.db.QueryRow(
+			`SELECT o.taskhash, u.unihash FROM outhashes_v2 o
+			 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
+			 WHERE o.method = ? AND o.outhash = ?`+
+				s.backedFilter("u.unihash")+`
+			 ORDER BY o.created ASC, o.id ASC
+			 LIMIT 1`,
+			method, outhash,
+		).Scan(&rec.Taskhash, &rec.Unihash)
+	} else {
+		err = s.db.QueryRow(
+			`SELECT taskhash FROM outhashes_v2
+			 WHERE method = ? AND outhash = ?
+			 ORDER BY created ASC, id ASC
+			 LIMIT 1`,
+			method, outhash,
+		).Scan(&rec.Taskhash)
+	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return outhashRecord{}, false, nil

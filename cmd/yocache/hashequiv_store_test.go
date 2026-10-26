@@ -70,7 +70,7 @@ func TestUnihashExists(t *testing.T) {
 func TestOuthashKeepsEveryReport(t *testing.T) {
 	s := newTestStore(t)
 
-	if _, ok, err := s.getOuthash("m", "out1"); err != nil || ok {
+	if _, ok, err := s.getOuthash("m", "out1", true); err != nil || ok {
 		t.Fatalf("empty store: got ok=%v err=%v, want false", ok, err)
 	}
 	for _, r := range []struct{ task, uni string }{{"task1", "uniA"}, {"task2", "uniB"}} {
@@ -92,7 +92,7 @@ func TestOuthashKeepsEveryReport(t *testing.T) {
 	}
 
 	// get-outhash answers with the oldest reporter and its current unihash.
-	got, ok, err := s.getOuthash("m", "out1")
+	got, ok, err := s.getOuthash("m", "out1", true)
 	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
 	if err != nil || !ok || got != want {
 		t.Fatalf("getOuthash: got %+v ok=%v err=%v, want %+v", got, ok, err, want)
@@ -430,7 +430,7 @@ func TestMigrationCopiesOuthashesToV2(t *testing.T) {
 		t.Fatalf("migrateDB: %v", err)
 	}
 	s := &hashEquivStore{db: db}
-	got, ok, err := s.getOuthash("m", "out1")
+	got, ok, err := s.getOuthash("m", "out1", true)
 	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
 	if err != nil || !ok || got != want {
 		t.Fatalf("getOuthash after migration: got %+v ok=%v err=%v, want %+v", got, ok, err, want)
@@ -591,5 +591,32 @@ func TestDownReconcilesManyReportersToOne(t *testing.T) {
 	}
 	if total != len(groups) {
 		t.Fatalf("outhashes row count: got %d, want %d (one per outhash group, reporters collapsed)", total, len(groups))
+	}
+}
+
+func TestGetOuthashModes(t *testing.T) {
+	s := newTestStore(t)
+	s.requireSstate = true
+
+	// task1 (uniA, no archive) reported out1 before task2 (uniB, archive).
+	for _, r := range []struct{ task, uni string }{{"task1", "uniA"}, {"task2", "uniB"}} {
+		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: r.task}); err != nil {
+			t.Fatalf("insertOuthash: %v", err)
+		}
+	}
+	addSstateBlob(t, s, "uniB", ".tar.zst")
+
+	got, ok, err := s.getOuthash("m", "out1", false)
+	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1"}
+	if err != nil || !ok || got != want {
+		t.Fatalf("without unihash: got %+v ok=%v err=%v, want oldest report %+v", got, ok, err, want)
+	}
+	got, ok, err = s.getOuthash("m", "out1", true)
+	want = outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task2", Unihash: "uniB"}
+	if err != nil || !ok || got != want {
+		t.Fatalf("with unihash: got %+v ok=%v err=%v, want oldest backed %+v", got, ok, err, want)
 	}
 }
