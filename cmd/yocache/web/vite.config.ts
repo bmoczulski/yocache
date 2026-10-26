@@ -2,11 +2,12 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 // Dashboard is served by the Go binary at /ui/ (see cmd/yocache/web.go).
-// `base` prefixes every built asset URL with /ui/ so index.html points at
-// /ui/assets/… when embedded and served from the Go server.
+// A relative `base` makes index.html point at ./assets/… rather than
+// /ui/assets/…, so the dashboard also works behind a reverse proxy that
+// strips a path prefix (served at /cache1/ui/, forwarded as /ui/).
 export default defineConfig({
   plugins: [svelte()],
-  base: '/ui/',
+  base: './',
   build: {
     outDir: 'dist',
     emptyOutDir: true,

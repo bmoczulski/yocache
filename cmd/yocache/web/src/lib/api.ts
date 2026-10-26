@@ -20,14 +20,16 @@ export type VersionInfo = {
   modified?: boolean;
 };
 
+// Paths are relative to the dashboard at <prefix>/ui/, so they keep any
+// prefix a reverse proxy stripped before forwarding (see vite.config.ts).
 export async function fetchStats(): Promise<Stats> {
-  const r = await fetch('/api/stats');
+  const r = await fetch('../api/stats');
   if (!r.ok) throw new Error(`GET /api/stats: ${r.status} ${r.statusText}`);
   return r.json();
 }
 
 export async function fetchVersion(): Promise<VersionInfo> {
-  const r = await fetch('/version');
+  const r = await fetch('../version');
   if (!r.ok) throw new Error(`GET /version: ${r.status} ${r.statusText}`);
   return r.json();
 }

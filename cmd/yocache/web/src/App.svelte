@@ -20,7 +20,7 @@
 </script>
 
 <header class="topbar">
-  <a class="brand" href="/ui/">
+  <a class="brand" href="./">
     <img class="logo" src={logo} alt="" width="28" height="28" />
     <h1>YoCache</h1>
   </a>
