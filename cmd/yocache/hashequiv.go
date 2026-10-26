@@ -55,14 +55,44 @@ import (
 const hashEquivProto = "OEHASHEQUIV"
 
 // outhashRecord is one report in the outhashes_v2 table: an output hash and the
-// taskhash that produced it. Unihash is only filled in on reads (get-outhash),
-// from the taskhash's unihashes row; the table doesn't store one. The optional
-// report fields (owner/PN/PV/PR/task/outhash_siginfo) are ignored for now.
+// taskhash that produced it, plus the optional provenance bitbake sends along
+// (owner always when set; PN/PV/PR/task/outhash_siginfo only with
+// SSTATE_HASHEQUIV_REPORT_TASKDATA = "1"). Empty means not sent (NULL in the
+// table). Created and Unihash are only filled in on reads: Created is set by
+// the store, and Unihash comes from the taskhash's unihashes row — the table
+// doesn't store one.
 type outhashRecord struct {
-	Method   string
-	Taskhash string
-	Outhash  string
-	Unihash  string
+	Method         string
+	Taskhash       string
+	Outhash        string
+	Created        string
+	Owner          string
+	PN             string
+	PV             string
+	PR             string
+	Task           string
+	OuthashSiginfo string
+	Unihash        string
+}
+
+// reportFields returns the optional columns of rec as get-outhash sends them:
+// JSON null for anything not on record, as bitbake's server does.
+func (rec outhashRecord) reportFields() map[string]any {
+	nullable := func(v string) any {
+		if v == "" {
+			return nil
+		}
+		return v
+	}
+	return map[string]any{
+		"created":         nullable(rec.Created),
+		"owner":           nullable(rec.Owner),
+		"PN":              nullable(rec.PN),
+		"PV":              nullable(rec.PV),
+		"PR":              nullable(rec.PR),
+		"task":            nullable(rec.Task),
+		"outhash_siginfo": nullable(rec.OuthashSiginfo),
+	}
 }
 
 // hashEquiv is the WebSocket handler that serves the OEHASHEQUIV protocol over
@@ -376,11 +406,10 @@ func (h *hashEquiv) handleGetOuthash(raw json.RawMessage) any {
 	if !ok {
 		return nil
 	}
-	resp := map[string]any{
-		"method":   rec.Method,
-		"outhash":  rec.Outhash,
-		"taskhash": rec.Taskhash,
-	}
+	resp := rec.reportFields()
+	resp["method"] = rec.Method
+	resp["outhash"] = rec.Outhash
+	resp["taskhash"] = rec.Taskhash
 	if withUnihash {
 		resp["unihash"] = rec.Unihash
 	}
@@ -389,18 +418,30 @@ func (h *hashEquiv) handleGetOuthash(raw json.RawMessage) any {
 
 func (h *hashEquiv) handleReport(raw json.RawMessage) any {
 	var req struct {
-		Method   string `json:"method"`
-		Taskhash string `json:"taskhash"`
-		Outhash  string `json:"outhash"`
-		Unihash  string `json:"unihash"`
+		Method         string `json:"method"`
+		Taskhash       string `json:"taskhash"`
+		Outhash        string `json:"outhash"`
+		Unihash        string `json:"unihash"`
+		Owner          string `json:"owner"`
+		PN             string `json:"PN"`
+		PV             string `json:"PV"`
+		PR             string `json:"PR"`
+		Task           string `json:"task"`
+		OuthashSiginfo string `json:"outhash_siginfo"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return invokeErr(err)
 	}
 	inserted, err := h.store.insertOuthash(outhashRecord{
-		Method:   req.Method,
-		Taskhash: req.Taskhash,
-		Outhash:  req.Outhash,
+		Method:         req.Method,
+		Taskhash:       req.Taskhash,
+		Outhash:        req.Outhash,
+		Owner:          req.Owner,
+		PN:             req.PN,
+		PV:             req.PV,
+		PR:             req.PR,
+		Task:           req.Task,
+		OuthashSiginfo: req.OuthashSiginfo,
 	})
 	if err != nil {
 		// Still look for an equivalent: the earlier reports are intact.

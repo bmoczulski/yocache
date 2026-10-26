@@ -10,6 +10,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (default) ties hash equivalence to the sstate stored on this server, `off`
   turns it off, `only` serves hash equivalence alone, for sstate kept
   elsewhere.
+- Hash equivalence stores the details bitbake sends with each report
+  (`owner`, plus `PN`, `task`, `outhash_siginfo`, … with
+  `SSTATE_HASHEQUIV_REPORT_TASKDATA = "1"`) and returns them from
+  `get-outhash`.
 
 ### Changed
 - Hash equivalence moved to bitbake's `outhashes_v2` layout, keeping every

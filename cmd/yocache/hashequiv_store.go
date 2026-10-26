@@ -207,14 +207,43 @@ func isoTimestamp(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000000+00:00")
 }
 
+// nullIfEmpty maps "" (field not sent) to SQL NULL.
+func nullIfEmpty(v string) sql.NullString {
+	return sql.NullString{String: v, Valid: v != ""}
+}
+
+// outhashColumns is the optional part of an outhashes_v2 row, in the order
+// scanOuthashColumns reads it. created is cast to TEXT because the driver
+// parses a DATETIME column into a time.Time and re-formats it on Scan, which
+// would not hand back the timestamp as stored.
+const outhashColumns = `CAST(o.created AS TEXT), o.owner, o.PN, o.PV, o.PR, o.task, o.outhash_siginfo`
+
+// scanOuthashColumns returns Scan destinations for outhashColumns, and a
+// function that copies the scanned values into rec ("" for NULL).
+func scanOuthashColumns(rec *outhashRecord) ([]any, func()) {
+	var vals [7]sql.NullString
+	dest := make([]any, len(vals))
+	for i := range vals {
+		dest[i] = &vals[i]
+	}
+	return dest, func() {
+		rec.Created, rec.Owner, rec.PN, rec.PV = vals[0].String, vals[1].String, vals[2].String, vals[3].String
+		rec.PR, rec.Task, rec.OuthashSiginfo = vals[4].String, vals[5].String, vals[6].String
+	}
+}
+
 // insertOuthash records that rec.Taskhash produced rec.Outhash (INSERT OR
 // IGNORE on the (method, taskhash, outhash) triple). inserted is false when the
 // same triple was already on record — as in bitbake's hashserv, the caller only
 // looks for an equivalent output on a new row.
 func (s *hashEquivStore) insertOuthash(rec outhashRecord) (inserted bool, err error) {
 	res, err := s.db.Exec(
-		`INSERT OR IGNORE INTO outhashes_v2 (method, taskhash, outhash, created) VALUES (?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO outhashes_v2
+		   (method, taskhash, outhash, created, owner, PN, PV, PR, task, outhash_siginfo)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Method, rec.Taskhash, rec.Outhash, isoTimestamp(time.Now()),
+		nullIfEmpty(rec.Owner), nullIfEmpty(rec.PN), nullIfEmpty(rec.PV), nullIfEmpty(rec.PR),
+		nullIfEmpty(rec.Task), nullIfEmpty(rec.OuthashSiginfo),
 	)
 	if err != nil {
 		return false, err
@@ -277,25 +306,26 @@ func (s *hashEquivStore) equivalentForOuthash(method, outhash, taskhash string) 
 // oldest report and rec.Unihash stays empty.
 func (s *hashEquivStore) getOuthash(method, outhash string, withUnihash bool) (outhashRecord, bool, error) {
 	rec := outhashRecord{Method: method, Outhash: outhash}
+	optional, fill := scanOuthashColumns(&rec)
 	var err error
 	if withUnihash {
 		err = s.db.QueryRow(
-			`SELECT o.taskhash, u.unihash FROM outhashes_v2 o
+			`SELECT o.taskhash, u.unihash, `+outhashColumns+` FROM outhashes_v2 o
 			 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
 			 WHERE o.method = ? AND o.outhash = ?`+
 				s.backedFilter("u.unihash")+`
 			 ORDER BY o.created ASC, o.id ASC
 			 LIMIT 1`,
 			method, outhash,
-		).Scan(&rec.Taskhash, &rec.Unihash)
+		).Scan(append([]any{&rec.Taskhash, &rec.Unihash}, optional...)...)
 	} else {
 		err = s.db.QueryRow(
-			`SELECT taskhash FROM outhashes_v2
-			 WHERE method = ? AND outhash = ?
-			 ORDER BY created ASC, id ASC
+			`SELECT o.taskhash, `+outhashColumns+` FROM outhashes_v2 o
+			 WHERE o.method = ? AND o.outhash = ?
+			 ORDER BY o.created ASC, o.id ASC
 			 LIMIT 1`,
 			method, outhash,
-		).Scan(&rec.Taskhash)
+		).Scan(append([]any{&rec.Taskhash}, optional...)...)
 	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -303,5 +333,6 @@ func (s *hashEquivStore) getOuthash(method, outhash string, withUnihash bool) (o
 	case err != nil:
 		return outhashRecord{}, false, err
 	}
+	fill()
 	return rec, true, nil
 }

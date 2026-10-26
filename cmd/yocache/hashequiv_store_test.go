@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 )
@@ -93,6 +94,7 @@ func TestOuthashKeepsEveryReport(t *testing.T) {
 
 	// get-outhash answers with the oldest reporter and its current unihash.
 	got, ok, err := s.getOuthash("m", "out1", true)
+	got.Created = checkCreated(t, got.Created)
 	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
 	if err != nil || !ok || got != want {
 		t.Fatalf("getOuthash: got %+v ok=%v err=%v, want %+v", got, ok, err, want)
@@ -610,13 +612,58 @@ func TestGetOuthashModes(t *testing.T) {
 	addSstateBlob(t, s, "uniB", ".tar.zst")
 
 	got, ok, err := s.getOuthash("m", "out1", false)
+	got.Created = checkCreated(t, got.Created)
 	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1"}
 	if err != nil || !ok || got != want {
 		t.Fatalf("without unihash: got %+v ok=%v err=%v, want oldest report %+v", got, ok, err, want)
 	}
 	got, ok, err = s.getOuthash("m", "out1", true)
+	got.Created = checkCreated(t, got.Created)
 	want = outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task2", Unihash: "uniB"}
 	if err != nil || !ok || got != want {
 		t.Fatalf("with unihash: got %+v ok=%v err=%v, want oldest backed %+v", got, ok, err, want)
+	}
+}
+
+// checkCreated fails the test unless created is an ISO 8601 UTC timestamp in
+// the form bitbake's hashserv writes, then returns "" so the caller can
+// compare the rest of a record by value.
+func checkCreated(t *testing.T, created string) string {
+	t.Helper()
+	if _, err := time.Parse("2006-01-02T15:04:05.000000+00:00", created); err != nil {
+		t.Fatalf("created = %q, want an isoformat() UTC timestamp: %v", created, err)
+	}
+	return ""
+}
+
+func TestOuthashReportFields(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	sent := outhashRecord{
+		Method: "m", Outhash: "out1", Taskhash: "task1",
+		Owner: "builder", PN: "zlib", PV: "1.3", PR: "r0", Task: "populate_sysroot",
+		OuthashSiginfo: "OEOuthashBasic\n",
+	}
+	if _, err := s.insertOuthash(sent); err != nil {
+		t.Fatalf("insertOuthash: %v", err)
+	}
+	got, ok, err := s.getOuthash("m", "out1", true)
+	if err != nil || !ok {
+		t.Fatalf("getOuthash: ok=%v err=%v", ok, err)
+	}
+	got.Created = checkCreated(t, got.Created)
+	want := sent
+	want.Unihash = "uniA"
+	if got != want {
+		t.Fatalf("getOuthash: got %+v, want %+v", got, want)
+	}
+
+	// Fields bitbake didn't send go out as JSON null, as from its own server.
+	fields := outhashRecord{Owner: "builder"}.reportFields()
+	if fields["owner"] != "builder" || fields["PN"] != nil || fields["created"] != nil {
+		t.Fatalf("reportFields = %v, want owner set and the rest nil", fields)
 	}
 }
