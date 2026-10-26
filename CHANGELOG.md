@@ -6,6 +6,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Unreleased
 
 ### Fixed
+- The dashboard now works behind a reverse proxy that strips a path prefix
+  (e.g. `https://proxy/cache1/` forwarded as `/`): the root redirect, asset
+  links, and API calls are all relative, so they keep the prefix instead of
+  pointing at `/ui/` on the proxy's root.
 - Hash-equivalence `get-stats` no longer counts the time spent sending a
   command's reply, matching BitBake's server, so a slow client connection no
   longer inflates the reported request times.

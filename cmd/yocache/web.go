@@ -25,10 +25,16 @@ func webUIHandler() http.Handler {
 	return http.StripPrefix("/ui", http.FileServer(http.FS(sub)))
 }
 
-// redirectRootToUI handles the bare "/" so a browser visitor lands on the
-// dashboard rather than a blob-store 404. Registered as "GET /{$}" so it
-// only matches the exact path — anything with a path segment still routes
-// through the catch-all blob handler.
-func redirectRootToUI(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+// redirectToUI sends a browser visitor of "/" or "/ui" to the dashboard
+// rather than a blob-store 404. Registered as "GET /{$}" and "GET /ui", so it
+// only matches those exact paths — anything else still routes through the
+// catch-all blob handler.
+//
+// Location is relative and set by hand: http.Redirect would resolve it
+// against the request path into an absolute "/ui/", dropping any prefix a
+// reverse proxy stripped before forwarding (e.g. /cache1 -> /cache1/ui/).
+// Both "/" and "/ui" resolve "ui/" to the same <prefix>/ui/.
+func redirectToUI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Location", "ui/")
+	w.WriteHeader(http.StatusMovedPermanently)
 }
