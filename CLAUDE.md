@@ -243,6 +243,14 @@ missing: `./goreleaser check` or `./goreleaser release --snapshot --clean`).
   is enabled on large builds — don't treat the current shape as the target.
 - Commits: Conventional Commits, no emojis, no `Co-authored-by`; keep them small
   and surgical (see the global instructions).
+- **Reference issues and PRs with colon-form trailers** in the commit footer:
+  `Fixes: #N` (GitHub closes it when the commit lands on `main`) or `Refs: #N`
+  (link only), never the colon-less `Fixes #N`. The colon form is at once a
+  Conventional Commits footer, a git trailer (`git interpret-trailers --parse`
+  ignores `Fixes #N`), and a GitHub closing keyword. Issues and PRs share one
+  number space per repo, so `#N` is unambiguous; use `Refs: #N` for past PRs
+  too. PRs are merged only with GitHub's "rebase and merge" (never squash), so
+  history carries no `(#N)` subject suffix.
 - **Every user-facing change needs a `CHANGELOG.md` entry** under `##
   Unreleased`, in the same commit/PR as the change — this is what the release
   workflow turns into GitHub Release notes (see "Release automation" above). A
