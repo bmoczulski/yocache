@@ -9,12 +9,13 @@ package main
 // bitbake's StaleSetSceneTasks ("Removing N stale sstate objects") mid-campaign.
 //
 // The schema mirrors the subset of bitbake's hashserv tables a build exercises:
-//   - unihashes: (method, taskhash) -> unihash, first-write-wins
-//   - outhashes: (method, outhash)  -> the taskhash/unihash that produced it,
-//     also first-write-wins, which is what makes it usable for cross-output
-//     equivalence: the one surviving row for an outhash is always the oldest
-//     taskhash that produced it, exactly what hashequiv.go's handleReport needs
-//     to unify a later, differently-hashed taskhash onto it.
+//   - unihashes: (method, taskhash) -> unihash, first-write-wins. The decision:
+//     which unihash a taskhash should use.
+//   - outhashes_v2: one row per (method, taskhash, outhash) report, with its
+//     creation time. The evidence: which taskhashes produced an output. Cross-
+//     output equivalence picks the oldest earlier reporter of the same output
+//     and takes that taskhash's unihash from unihashes, as bitbake's
+//     get_equivalent_for_outhash does.
 // unihashExists is answered from the unihashes table (a unihash "exists" if some
 // taskhash maps to it), so we don't keep a separate set.
 //
@@ -30,6 +31,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // hashEquivStore is the SQLite-backed hash-equivalence database. database/sql's
@@ -131,7 +133,7 @@ func (s *hashEquivStore) DeleteByUnihash(unihash string) (unihashRows, outhashRo
 
 	// outhashes first, while the unihashes rows it joins against still exist.
 	res, err := tx.Exec(`
-		DELETE FROM outhashes
+		DELETE FROM outhashes_v2
 		WHERE (method, taskhash) IN (
 			SELECT method, taskhash FROM unihashes WHERE unihash = ?
 		)`, unihash,
@@ -171,9 +173,9 @@ func (s *hashEquivStore) PruneUnbacked() (unihashRows, outhashRows int64, err er
 	unihashRows, _ = res.RowsAffected()
 
 	res, err = tx.Exec(`
-		DELETE FROM outhashes WHERE NOT EXISTS (
+		DELETE FROM outhashes_v2 WHERE NOT EXISTS (
 			SELECT 1 FROM unihashes u
-			WHERE u.method = outhashes.method AND u.taskhash = outhashes.taskhash
+			WHERE u.method = outhashes_v2.method AND u.taskhash = outhashes_v2.taskhash
 		)`)
 	if err != nil {
 		return unihashRows, 0, err
@@ -198,15 +200,27 @@ func (s *hashEquivStore) unihashExists(unihash string) (bool, error) {
 	return exists, nil
 }
 
-// insertOuthash records an outhash -> (taskhash, unihash) mapping, first-write-
-// wins per (method, outhash).
-func (s *hashEquivStore) insertOuthash(rec outhashRecord) error {
-	_, err := s.db.Exec(
-		`INSERT INTO outhashes (method, outhash, taskhash, unihash) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (method, outhash) DO NOTHING`,
-		rec.Method, rec.Outhash, rec.Taskhash, rec.Unihash,
+// isoTimestamp formats t as bitbake hashserv stores outhashes_v2.created
+// (Python's datetime.isoformat() in UTC). Fixed width, so the column sorts
+// chronologically as text.
+func isoTimestamp(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000000+00:00")
+}
+
+// insertOuthash records that rec.Taskhash produced rec.Outhash (INSERT OR
+// IGNORE on the (method, taskhash, outhash) triple). inserted is false when the
+// same triple was already on record — as in bitbake's hashserv, the caller only
+// looks for an equivalent output on a new row.
+func (s *hashEquivStore) insertOuthash(rec outhashRecord) (inserted bool, err error) {
+	res, err := s.db.Exec(
+		`INSERT OR IGNORE INTO outhashes_v2 (method, taskhash, outhash, created) VALUES (?, ?, ?, ?)`,
+		rec.Method, rec.Taskhash, rec.Outhash, isoTimestamp(time.Now()),
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // Stats returns counts describing the hash-equivalence store: TaskHashes is
@@ -222,26 +236,28 @@ func (s *hashEquivStore) Stats() (*hashEquivStats, error) {
 	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT unihash) FROM unihashes`).Scan(&st.Unihashes); err != nil {
 		return nil, fmt.Errorf("hashequiv stats unihashes: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM outhashes`).Scan(&st.Outhashes); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM outhashes_v2`).Scan(&st.Outhashes); err != nil {
 		return nil, fmt.Errorf("hashequiv stats outhashes: %w", err)
 	}
 	return st, nil
 }
 
-// unifiedForOuthash returns the unihash in effect for the earlier, different
-// taskhash that first reported (method, outhash) — the cross-output
-// equivalence target for taskhash, as in bitbake's get_equivalent_for_outhash.
-// It reads that taskhash's current unihashes row rather than the unihash
-// stored on the outhash row, so it follows any later repair of that row. With
-// requireSstate the target must have its archive stored; otherwise ok is false
-// and the caller keeps its own unihash.
-func (s *hashEquivStore) unifiedForOuthash(method, outhash, taskhash string) (string, bool, error) {
+// equivalentForOuthash returns the unihash in effect for the oldest other
+// taskhash that reported (method, outhash) — the cross-output equivalence
+// target for taskhash, as in bitbake's get_equivalent_for_outhash. With
+// requireSstate, reporters whose unihash has no stored archive are skipped, so
+// the next-oldest one with an archive wins; if none has one, ok is false and
+// the caller keeps its own unihash. id breaks ties between equal timestamps
+// (and between rows copied from the old table, which have none).
+func (s *hashEquivStore) equivalentForOuthash(method, outhash, taskhash string) (string, bool, error) {
 	var u string
 	err := s.db.QueryRow(
-		`SELECT u.unihash FROM outhashes o
+		`SELECT u.unihash FROM outhashes_v2 o
 		 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
 		 WHERE o.method = ? AND o.outhash = ? AND o.taskhash != ?`+
-			s.backedFilter("u.unihash"),
+			s.backedFilter("u.unihash")+`
+		 ORDER BY o.created ASC, o.id ASC
+		 LIMIT 1`,
 		method, outhash, taskhash,
 	).Scan(&u)
 	switch {
@@ -253,11 +269,16 @@ func (s *hashEquivStore) unifiedForOuthash(method, outhash, taskhash string) (st
 	return u, true, nil
 }
 
-// getOuthash returns the record stored for (method, outhash).
+// getOuthash returns the oldest report of (method, outhash), with the unihash
+// currently in effect for its taskhash (bitbake's get_unihash_by_outhash).
 func (s *hashEquivStore) getOuthash(method, outhash string) (outhashRecord, bool, error) {
 	rec := outhashRecord{Method: method, Outhash: outhash}
 	err := s.db.QueryRow(
-		`SELECT taskhash, unihash FROM outhashes WHERE method = ? AND outhash = ?`,
+		`SELECT o.taskhash, u.unihash FROM outhashes_v2 o
+		 JOIN unihashes u ON u.method = o.method AND u.taskhash = o.taskhash
+		 WHERE o.method = ? AND o.outhash = ?
+		 ORDER BY o.created ASC, o.id ASC
+		 LIMIT 1`,
 		method, outhash,
 	).Scan(&rec.Taskhash, &rec.Unihash)
 	switch {

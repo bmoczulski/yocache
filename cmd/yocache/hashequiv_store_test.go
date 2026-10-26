@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 // newTestStore opens a throwaway DB in the test's temp dir, applies migrations,
@@ -65,29 +67,47 @@ func TestUnihashExists(t *testing.T) {
 	}
 }
 
-func TestOuthashRoundTripAndFirstWriteWins(t *testing.T) {
+func TestOuthashKeepsEveryReport(t *testing.T) {
 	s := newTestStore(t)
 
 	if _, ok, err := s.getOuthash("m", "out1"); err != nil || ok {
 		t.Fatalf("empty store: got ok=%v err=%v, want false", ok, err)
 	}
-
-	rec := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
-	if err := s.insertOuthash(rec); err != nil {
-		t.Fatalf("insertOuthash: %v", err)
+	for _, r := range []struct{ task, uni string }{{"task1", "uniA"}, {"task2", "uniB"}} {
+		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		inserted, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: r.task})
+		if err != nil || !inserted {
+			t.Fatalf("insertOuthash %s: inserted=%v err=%v, want new row", r.task, inserted, err)
+		}
 	}
-	// First-write-wins on (method, outhash): a later differing report is ignored.
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task2", Unihash: "uniB"}); err != nil {
-		t.Fatalf("insertOuthash conflict: %v", err)
+	// Repeating a known (taskhash, outhash) report adds nothing.
+	inserted, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task2"})
+	if err != nil || inserted {
+		t.Fatalf("repeat report: inserted=%v err=%v, want no new row", inserted, err)
+	}
+	if n := countOuthashRows(t, s, "out1"); n != 2 {
+		t.Fatalf("out1 has %d rows, want 2 (one per reporter)", n)
 	}
 
+	// get-outhash answers with the oldest reporter and its current unihash.
 	got, ok, err := s.getOuthash("m", "out1")
-	if err != nil || !ok {
-		t.Fatalf("getOuthash: ok=%v err=%v, want true", ok, err)
+	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
+	if err != nil || !ok || got != want {
+		t.Fatalf("getOuthash: got %+v ok=%v err=%v, want %+v", got, ok, err, want)
 	}
-	if got != rec {
-		t.Fatalf("getOuthash: got %+v, want %+v", got, rec)
+}
+
+// countOuthashRows counts the reports stored for outhash, independent of
+// whether their taskhashes still have a unihash.
+func countOuthashRows(t *testing.T, s *hashEquivStore, outhash string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM outhashes_v2 WHERE outhash = ?`, outhash).Scan(&n); err != nil {
+		t.Fatalf("count outhashes_v2: %v", err)
 	}
+	return n
 }
 
 func TestDeleteByUnihash(t *testing.T) {
@@ -101,17 +121,17 @@ func TestDeleteByUnihash(t *testing.T) {
 	if _, err := s.insertUnihash("m", "task2", "uniA"); err != nil {
 		t.Fatalf("insertUnihash task2: %v", err)
 	}
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1"}); err != nil {
 		t.Fatalf("insertOuthash task1: %v", err)
 	}
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out2", Taskhash: "task2", Unihash: "uniA"}); err != nil {
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out2", Taskhash: "task2"}); err != nil {
 		t.Fatalf("insertOuthash task2: %v", err)
 	}
 	// An unrelated taskhash/unihash that must survive.
 	if _, err := s.insertUnihash("m", "task3", "uniB"); err != nil {
 		t.Fatalf("insertUnihash task3: %v", err)
 	}
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out3", Taskhash: "task3", Unihash: "uniB"}); err != nil {
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out3", Taskhash: "task3"}); err != nil {
 		t.Fatalf("insertOuthash task3: %v", err)
 	}
 
@@ -132,19 +152,19 @@ func TestDeleteByUnihash(t *testing.T) {
 	if _, ok, _ := s.getEquivalent("m", "task2"); ok {
 		t.Error("task2 unihash survived DeleteByUnihash")
 	}
-	if _, ok, _ := s.getOuthash("m", "out1"); ok {
-		t.Error("out1 outhash survived DeleteByUnihash")
+	if n := countOuthashRows(t, s, "out1"); n != 0 {
+		t.Errorf("out1: %d outhash rows survived DeleteByUnihash", n)
 	}
-	if _, ok, _ := s.getOuthash("m", "out2"); ok {
-		t.Error("out2 outhash survived DeleteByUnihash")
+	if n := countOuthashRows(t, s, "out2"); n != 0 {
+		t.Errorf("out2: %d outhash rows survived DeleteByUnihash", n)
 	}
 
 	// Unrelated unihash/outhash must survive.
 	if u, ok, _ := s.getEquivalent("m", "task3"); !ok || u != "uniB" {
 		t.Errorf("task3 unihash = %q ok=%v, want uniB/true", u, ok)
 	}
-	if _, ok, _ := s.getOuthash("m", "out3"); !ok {
-		t.Error("out3 outhash should survive DeleteByUnihash")
+	if n := countOuthashRows(t, s, "out3"); n != 1 {
+		t.Errorf("out3: %d outhash rows, want 1 to survive DeleteByUnihash", n)
 	}
 }
 
@@ -207,7 +227,7 @@ func TestStats(t *testing.T) {
 	if _, err := s.insertUnihash("m", "task2", "uniA"); err != nil {
 		t.Fatalf("insertUnihash: %v", err)
 	}
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1"}); err != nil {
 		t.Fatalf("insertOuthash: %v", err)
 	}
 
@@ -281,30 +301,30 @@ func TestRequireSstateInsertReplacesUnbackedWinner(t *testing.T) {
 	}
 }
 
-func TestUnifiedForOuthash(t *testing.T) {
+func TestEquivalentForOuthash(t *testing.T) {
 	s := newTestStore(t)
 
 	if _, err := s.insertUnihash("m", "task1", "uniA"); err != nil {
 		t.Fatalf("insertUnihash: %v", err)
 	}
-	if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}); err != nil {
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1"}); err != nil {
 		t.Fatalf("insertOuthash: %v", err)
 	}
 
 	// The taskhash that owns the outhash row has nothing to unify with.
-	if _, ok, err := s.unifiedForOuthash("m", "out1", "task1"); err != nil || ok {
+	if _, ok, err := s.equivalentForOuthash("m", "out1", "task1"); err != nil || ok {
 		t.Fatalf("own row: ok=%v err=%v, want miss", ok, err)
 	}
-	if u, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
+	if u, ok, err := s.equivalentForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
 		t.Fatalf("other taskhash: %q ok=%v err=%v, want uniA", u, ok, err)
 	}
 
 	s.requireSstate = true
-	if _, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || ok {
+	if _, ok, err := s.equivalentForOuthash("m", "out1", "task2"); err != nil || ok {
 		t.Fatalf("target without archive: ok=%v err=%v, want miss", ok, err)
 	}
 	addSstateBlob(t, s, "uniA", ".tar.zst")
-	if u, ok, err := s.unifiedForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
+	if u, ok, err := s.equivalentForOuthash("m", "out1", "task2"); err != nil || !ok || u != "uniA" {
 		t.Fatalf("target with archive: %q ok=%v err=%v, want uniA", u, ok, err)
 	}
 }
@@ -322,7 +342,7 @@ func TestPruneUnbacked(t *testing.T) {
 		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
 			t.Fatalf("insertUnihash: %v", err)
 		}
-		if err := s.insertOuthash(outhashRecord{Method: "m", Outhash: r.out, Taskhash: r.task, Unihash: r.uni}); err != nil {
+		if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: r.out, Taskhash: r.task}); err != nil {
 			t.Fatalf("insertOuthash: %v", err)
 		}
 	}
@@ -339,8 +359,8 @@ func TestPruneUnbacked(t *testing.T) {
 	if u, ok, _ := s.getEquivalent("m", "task1"); !ok || u != "uniA" {
 		t.Fatalf("backed entry: got %q ok=%v, want uniA kept", u, ok)
 	}
-	if _, ok, _ := s.getOuthash("m", "out1"); !ok {
-		t.Fatal("backed entry's outhash row was removed")
+	if n := countOuthashRows(t, s, "out1"); n != 1 {
+		t.Fatalf("backed entry: %d outhash rows, want 1", n)
 	}
 	for _, task := range []string{"task2", "task3"} {
 		if _, ok, _ := s.getEquivalent("m", task); ok {
@@ -348,8 +368,228 @@ func TestPruneUnbacked(t *testing.T) {
 		}
 	}
 	for _, out := range []string{"out2", "out3"} {
-		if _, ok, _ := s.getOuthash("m", out); ok {
-			t.Fatalf("%s: outhash row of unbacked entry survived", out)
+		if n := countOuthashRows(t, s, out); n != 0 {
+			t.Fatalf("%s: %d outhash rows of unbacked entry survived", out, n)
 		}
+	}
+}
+
+func TestEquivalentForOuthashFallsBackToOldestBacked(t *testing.T) {
+	s := newTestStore(t)
+	s.requireSstate = true
+
+	// task1 and task2 share uniA (unified), task3 has its own uniC; all
+	// produced out1, in that order.
+	for _, r := range []struct{ task, uni string }{{"task1", "uniA"}, {"task2", "uniA"}, {"task3", "uniC"}} {
+		if _, err := s.insertUnihash("m", r.task, r.uni); err != nil {
+			t.Fatalf("insertUnihash: %v", err)
+		}
+		if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: r.task}); err != nil {
+			t.Fatalf("insertOuthash: %v", err)
+		}
+	}
+	addSstateBlob(t, s, "uniA", ".tar.zst")
+	addSstateBlob(t, s, "uniC", ".tar.zst")
+	if u, ok, err := s.equivalentForOuthash("m", "out1", "task4"); err != nil || !ok || u != "uniA" {
+		t.Fatalf("all backed: %q ok=%v err=%v, want oldest uniA", u, ok, err)
+	}
+
+	// uniA's archive goes; the next-oldest reporter with an archive wins.
+	if _, err := s.db.Exec(`DELETE FROM blobs WHERE checksum = 'uniA'`); err != nil {
+		t.Fatalf("delete blob: %v", err)
+	}
+	if u, ok, err := s.equivalentForOuthash("m", "out1", "task4"); err != nil || !ok || u != "uniC" {
+		t.Fatalf("oldest unbacked: %q ok=%v err=%v, want uniC", u, ok, err)
+	}
+}
+
+func TestMigrationCopiesOuthashesToV2(t *testing.T) {
+	db, err := openOperationalDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("openOperationalDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// A database as v0.1.13 left it: schema up to 0004, one outhashes row.
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("goose dialect: %v", err)
+	}
+	if err := goose.UpTo(db, "migrations", 4); err != nil {
+		t.Fatalf("migrate to 4: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO unihashes VALUES ('m', 'task1', 'uniA')`); err != nil {
+		t.Fatalf("seed unihashes: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO outhashes VALUES ('m', 'out1', 'task1', 'uniA')`); err != nil {
+		t.Fatalf("seed outhashes: %v", err)
+	}
+
+	if err := migrateDB(db); err != nil {
+		t.Fatalf("migrateDB: %v", err)
+	}
+	s := &hashEquivStore{db: db}
+	got, ok, err := s.getOuthash("m", "out1")
+	want := outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task1", Unihash: "uniA"}
+	if err != nil || !ok || got != want {
+		t.Fatalf("getOuthash after migration: got %+v ok=%v err=%v, want %+v", got, ok, err, want)
+	}
+
+	// A copied row has no timestamp, so it stays the oldest reporter.
+	if _, err := s.insertUnihash("m", "task2", "uniB"); err != nil {
+		t.Fatalf("insertUnihash: %v", err)
+	}
+	if _, err := s.insertOuthash(outhashRecord{Method: "m", Outhash: "out1", Taskhash: "task2"}); err != nil {
+		t.Fatalf("insertOuthash: %v", err)
+	}
+	if u, ok, err := s.equivalentForOuthash("m", "out1", "task3"); err != nil || !ok || u != "uniA" {
+		t.Fatalf("equivalentForOuthash: %q ok=%v err=%v, want copied row's uniA", u, ok, err)
+	}
+}
+
+// TestDownReconcilesManyReportersToOne exercises 0005's Down migration, which
+// must collapse every outhashes_v2 reporter of a given (method, outhash) back
+// onto the single row the pre-0005 outhashes table had room for -- picking
+// whichever reporter is earliest by created, NULL (a row copied forward by
+// Up, rather than reported since) sorting first regardless of insertion
+// order.
+func TestDownReconcilesManyReportersToOne(t *testing.T) {
+	db, err := openOperationalDB(filepath.Join(t.TempDir(), "reconcile.db"))
+	if err != nil {
+		t.Fatalf("openOperationalDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("goose dialect: %v", err)
+	}
+	if err := goose.UpTo(db, "migrations", 5); err != nil {
+		t.Fatalf("UpTo 5: %v", err)
+	}
+
+	type reporter struct {
+		taskhash, unihash, created string // created == "" means NULL
+	}
+	type group struct {
+		method, outhash string
+		reporters       []reporter
+		wantTaskhash    string
+		wantUnihash     string
+	}
+
+	groups := []group{
+		{
+			// Three real timestamps, inserted out of chronological order --
+			// the middle one first, then the latest, then the earliest --
+			// so this also checks created beats insertion order (id).
+			method: "m", outhash: "outX",
+			reporters: []reporter{
+				{"task5", "uniE", "2026-03-01T00:00:00Z"},
+				{"task8", "uniH", "2026-06-01T00:00:00Z"},
+				{"task2", "uniB", "2026-01-15T00:00:00Z"},
+			},
+			wantTaskhash: "task2", wantUnihash: "uniB",
+		},
+		{
+			// A NULL (copied-forward) reporter arrives after two
+			// timestamped ones -- NULL must still win as "earliest"
+			// regardless of insertion order.
+			method: "m", outhash: "outY",
+			reporters: []reporter{
+				{"task3", "uniC", "2026-02-01T00:00:00Z"},
+				{"task4", "uniD", "2026-01-01T00:00:00Z"},
+				{"task1", "uniA", ""},
+			},
+			wantTaskhash: "task1", wantUnihash: "uniA",
+		},
+		{
+			// Two reporters with an identical timestamp: the tie-break must
+			// be deterministic (lowest id, i.e. whichever was reported
+			// first) rather than ambiguous.
+			method: "m", outhash: "outZ",
+			reporters: []reporter{
+				{"task10", "uniJ", "2026-04-01T00:00:00Z"},
+				{"task11", "uniK", "2026-04-01T00:00:00Z"},
+			},
+			wantTaskhash: "task10", wantUnihash: "uniJ",
+		},
+		{
+			// Same outhash text as the first group, but a different
+			// method -- must reconcile independently, not merge with "m".
+			method: "n", outhash: "outX",
+			reporters: []reporter{
+				{"task20", "uniT", "2026-05-01T00:00:00Z"},
+				{"task21", "uniU", "2026-01-01T00:00:00Z"},
+			},
+			wantTaskhash: "task21", wantUnihash: "uniU",
+		},
+		{
+			// A single reporter: must survive as-is.
+			method: "m", outhash: "outSingle",
+			reporters:    []reporter{{"task30", "uniSingle", "2026-01-01T00:00:00Z"}},
+			wantTaskhash: "task30", wantUnihash: "uniSingle",
+		},
+	}
+
+	// Insert interleaved across groups (round-robin by reporter index) so
+	// the reconciliation query can't accidentally rely on one outhash's
+	// rows being contiguous by id.
+	maxReporters := 0
+	for _, g := range groups {
+		if len(g.reporters) > maxReporters {
+			maxReporters = len(g.reporters)
+		}
+	}
+	seenUnihash := map[string]bool{}
+	for i := 0; i < maxReporters; i++ {
+		for _, g := range groups {
+			if i >= len(g.reporters) {
+				continue
+			}
+			r := g.reporters[i]
+			key := g.method + "/" + r.taskhash
+			if !seenUnihash[key] {
+				if _, err := db.Exec(`INSERT INTO unihashes VALUES (?, ?, ?)`, g.method, r.taskhash, r.unihash); err != nil {
+					t.Fatalf("seed unihashes %s/%s: %v", g.method, r.taskhash, err)
+				}
+				seenUnihash[key] = true
+			}
+			var createdArg interface{}
+			if r.created != "" {
+				createdArg = r.created
+			}
+			if _, err := db.Exec(`INSERT INTO outhashes_v2 (method, taskhash, outhash, created) VALUES (?, ?, ?, ?)`,
+				g.method, r.taskhash, g.outhash, createdArg); err != nil {
+				t.Fatalf("seed outhashes_v2 %s/%s/%s: %v", g.method, r.taskhash, g.outhash, err)
+			}
+		}
+	}
+
+	if err := goose.DownTo(db, "migrations", 4); err != nil {
+		t.Fatalf("DownTo 4: %v", err)
+	}
+
+	for _, g := range groups {
+		var taskhash, unihash string
+		err := db.QueryRow(`SELECT taskhash, unihash FROM outhashes WHERE method = ? AND outhash = ?`, g.method, g.outhash).
+			Scan(&taskhash, &unihash)
+		if err != nil {
+			t.Fatalf("outhashes %s/%s: %v", g.method, g.outhash, err)
+		}
+		if taskhash != g.wantTaskhash || unihash != g.wantUnihash {
+			t.Fatalf("outhashes %s/%s: got taskhash=%s unihash=%s, want taskhash=%s unihash=%s",
+				g.method, g.outhash, taskhash, unihash, g.wantTaskhash, g.wantUnihash)
+		}
+	}
+
+	var total int
+	if err := db.QueryRow(`SELECT count(*) FROM outhashes`).Scan(&total); err != nil {
+		t.Fatalf("count outhashes: %v", err)
+	}
+	if total != len(groups) {
+		t.Fatalf("outhashes row count: got %d, want %d (one per outhash group, reporters collapsed)", total, len(groups))
 	}
 }

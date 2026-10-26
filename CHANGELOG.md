@@ -11,6 +11,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   turns it off, `only` serves hash equivalence alone, for sstate kept
   elsewhere.
 
+### Changed
+- Hash equivalence moved to bitbake's `outhashes_v2` layout, keeping every
+  taskhash that reported an output, not just the first. Migrated
+  automatically at startup; downgrading is supported.
+
 ### Fixed
 - No more sstate re-check avalanche: hash equivalence no longer answers with
   a unihash whose sstate archive is missing. Each such answer made bitbake

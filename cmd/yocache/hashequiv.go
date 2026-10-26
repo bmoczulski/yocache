@@ -54,10 +54,10 @@ import (
 
 const hashEquivProto = "OEHASHEQUIV"
 
-// outhashRecord is one row of the outhashes table: an output hash and the
-// taskhash/unihash that produced it. It backs get-outhash, and gives the later
-// equivalence dedup data to query; the optional report fields
-// (owner/PN/PV/PR/task/outhash_siginfo) are ignored for now.
+// outhashRecord is one report in the outhashes_v2 table: an output hash and the
+// taskhash that produced it. Unihash is only filled in on reads (get-outhash),
+// from the taskhash's unihashes row; the table doesn't store one. The optional
+// report fields (owner/PN/PV/PR/task/outhash_siginfo) are ignored for now.
 type outhashRecord struct {
 	Method   string
 	Taskhash string
@@ -392,26 +392,29 @@ func (h *hashEquiv) handleReport(raw json.RawMessage) any {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return invokeErr(err)
 	}
-	if err := h.store.insertOuthash(outhashRecord{
+	inserted, err := h.store.insertOuthash(outhashRecord{
 		Method:   req.Method,
 		Taskhash: req.Taskhash,
 		Outhash:  req.Outhash,
-		Unihash:  req.Unihash,
-	}); err != nil {
+	})
+	if err != nil {
+		// Still look for an equivalent: the earlier reports are intact.
 		h.log.Warn("hashequiv: outhash persist failed", "err", err, "method", req.Method)
+		inserted = true
 	}
 
-	// Cross-output equivalence: outhashes is first-write-wins per (method,
-	// outhash), so if a *different* taskhash than ours sits on this outhash,
-	// its output arrived first — its unihash is what should be in effect for
-	// us too. Otherwise (no prior row, the row is our own, or the store won't
-	// vouch for it because its sstate archive is gone) there is nothing to
-	// unify with, so fall through to our own reported unihash.
+	// Cross-output equivalence, as bitbake's hashserv does it: only a report
+	// we haven't seen before looks for an earlier taskhash with the same
+	// output, and adopts the unihash of the oldest one (that still has its
+	// archive, with requireSstate). A repeat of a known report keeps whatever
+	// its taskhash already has.
 	reportUnihash := req.Unihash
-	if u, ok, err := h.store.unifiedForOuthash(req.Method, req.Outhash, req.Taskhash); err != nil {
-		h.log.Warn("hashequiv: outhash lookup failed", "err", err, "method", req.Method)
-	} else if ok {
-		reportUnihash = u
+	if inserted {
+		if u, ok, err := h.store.equivalentForOuthash(req.Method, req.Outhash, req.Taskhash); err != nil {
+			h.log.Warn("hashequiv: outhash lookup failed", "err", err, "method", req.Method)
+		} else if ok {
+			reportUnihash = u
+		}
 	}
 
 	// On a write failure, fall back to the reported unihash so the build
