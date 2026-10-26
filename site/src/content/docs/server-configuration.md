@@ -65,5 +65,12 @@ byte share. It's a Svelte SPA compiled into the binary — no separate web
 host, no configuration flag, no way to disable it in this release. Root
 `/` returns a 301 to `/ui/` where the dashboard lives.
 
+The dashboard uses only relative URLs, so it also works behind a reverse
+proxy that strips a path prefix — e.g. several instances at
+`https://proxy/cache1/`, `https://proxy/cache2/` via Traefik's `stripPrefix`.
+Link to the prefix with its trailing slash (`/cache1/`): from a bare
+`/cache1` the browser resolves the relative redirect to `/ui/`, outside the
+prefix.
+
 For the build-side knobs, see
 [Client configuration](../client-configuration/).
