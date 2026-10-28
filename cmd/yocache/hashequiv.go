@@ -19,9 +19,16 @@ package main
 // or 32 KiB chunking in bb.asyncrpc's StreamConnection applies — one frame is one
 // message. We mirror the subset of the protocol a build actually exercises
 // (verified against bitbake's siggen + hashserv.server): the handshake, ping,
-// get/get-outhash/report/report-equiv, get-stats, and the get-stream/exists-stream
-// pipelined modes. Admin/gc/user RPCs and backfill-wait are never issued by a
-// build and are not implemented.
+// get/get-outhash/report/report-equiv, and the get-stream/exists-stream
+// pipelined modes. On top of that, get-stats answers bitbake-hashclient and
+// pre-build health checks; a build never sends it.
+//
+// Not implemented, so answered with "Unrecognized command":
+//   - auth and the user RPCs. A build does send auth when BB_HASHSERVE_USERNAME
+//     and BB_HASHSERVE_PASSWORD (or ~/.netrc) are set, so authenticated setups
+//     can't use this server yet.
+//   - get-db-usage and get-db-query-columns (read-only, bitbake-hashclient only).
+//   - the admin RPCs: reset-stats, backfill-wait, remove, gc-*, clean-unused.
 //
 // This is backed by a SQLite store (hashequiv_store.go): first-write-wins
 // unihashes per (method, taskhash), plus cross-output equivalence — a reported
