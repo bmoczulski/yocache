@@ -25,20 +25,25 @@ YOCACHE_URL ??= "http://localhost:6768"
 # --- Hash-equivalence (BB_HASHSERVE) default -------------------------------
 # Point bitbake's hash-equivalence at this yocache instance unless the user
 # already set BB_HASHSERVE somewhere (local.conf/site.conf/a distro conf):
-# ws:// on Yocto >= Scarthgap (whose hashserv client supports it), else the
-# dedicated raw-TCP listener (--hashequiv-addr, default :6767) for older
-# releases. "??=" is the key: it only takes effect if BB_HASHSERVE has no
-# real assignment (=, ?=, etc.) ANYWHERE, regardless of parse order, so a
-# user's own setting always wins — but it still overrides bitbake.conf's own
-# "BB_HASHSERVE ??= auto", because that's also a weak default and this class
-# is inherited (via INHERIT) after bitbake.conf is parsed, so this one wins
-# the fallback slot when nothing else set the variable for real.
+# ws:// (wss:// for an https:// YOCACHE_URL, keeping its path) on Yocto >=
+# Scarthgap, whose hashserv client supports it, else the dedicated raw-TCP
+# listener (--hashequiv-addr, default :6767) for older releases. "??=" is the
+# key: it only takes effect if BB_HASHSERVE has no real assignment (=, ?=,
+# etc.) ANYWHERE, regardless of parse order, so a user's own setting always
+# wins — but it still overrides bitbake.conf's own "BB_HASHSERVE ??= auto",
+# because that's also a weak default and this class is inherited (via INHERIT)
+# after bitbake.conf is parsed, so this one wins the fallback slot when nothing
+# else set the variable for real.
 def _yocache_hashserve_default(d):
     import urllib.parse
-    host = urllib.parse.urlsplit(d.getVar("YOCACHE_URL")).netloc
+    url = urllib.parse.urlsplit(d.getVar("YOCACHE_URL"))
     if hasattr(__import__('hashserv'), 'ADDR_TYPE_WS'):
-        return "ws://%s/hashequiv" % host
-    return "%s:6767" % host.split(":")[0]
+        # Follow YOCACHE_URL's TLS and path, so a server behind a reverse
+        # proxy at https://proxy/cache1 gets wss://proxy/cache1/hashequiv.
+        scheme = "wss" if url.scheme == "https" else "ws"
+        path = url.path.rstrip("/")
+        return "%s://%s%s/hashequiv" % (scheme, url.netloc, path)
+    return "%s:6767" % url.netloc.split(":")[0]
 
 BB_HASHSERVE ??= "${@_yocache_hashserve_default(d)}"
 

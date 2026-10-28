@@ -6,6 +6,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Unreleased
 
 ### Fixed
+- The default `BB_HASHSERVE` now follows `YOCACHE_URL`'s scheme and path:
+  `https://proxy/cache1` gives `wss://proxy/cache1/hashequiv`. It used to be
+  `ws://proxy/hashequiv`, plain text and outside the prefix, so hash
+  equivalence behind an HTTPS proxy needed `BB_HASHSERVE` set by hand.
 - Uploads now keep a path prefix in `YOCACHE_URL` (e.g.
   `https://proxy/cache1`). They used to go to the proxy's root, so a build
   behind a prefix-stripping reverse proxy uploaded nothing.
