@@ -178,3 +178,33 @@ func TestHashEquivStatsExcludeReplySend(t *testing.T) {
 		t.Fatalf("total_time = %gs, includes the %v reply send", got.TotalTime, delay)
 	}
 }
+
+// A million 0.1s sum to 100000.0000013 with plain float addition; the
+// compensated total must land on the correctly rounded 100000.
+func TestHashEquivStatsCompensatedTotal(t *testing.T) {
+	var stats hashEquivRequestStats
+	const n = 1_000_000
+	for i := 0; i < n; i++ {
+		stats.add(0.1)
+	}
+	got := stats.snapshot()
+	if got.TotalTime != 100000 || got.Average != 0.1 {
+		t.Fatalf("total_time = %.17g, average = %.17g; want 100000 and 0.1", got.TotalTime, got.Average)
+	}
+}
+
+// A total whose first-order correction loses bits of its own: adding 1 and
+// 2^-60 to 2^53 drops both, so the correction must hold 1 + 2^-60, which a
+// float64 can't. After the large terms cancel, only Klein's second-order term
+// still has the 2^-60. (Neumaier gives 0 here, a plain sum -1.)
+func TestHashEquivStatsSecondOrderCompensation(t *testing.T) {
+	var stats hashEquivRequestStats
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+	for _, x := range []float64{0x1p53, 1, 0x1p-60, -0x1p53, -1} {
+		stats.addTotalLocked(x)
+	}
+	if got, want := stats.totalLocked(), 0x1p-60; got != want {
+		t.Fatalf("total = %g, want %g", got, want)
+	}
+}
