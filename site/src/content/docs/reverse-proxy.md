@@ -48,6 +48,77 @@ proxy_request_buffering off;                      # stream uploads through
 For a single instance on its own hostname, use `location / { … }` with the
 same settings.
 
+### Complete example with Docker Compose
+
+Both instances and nginx in one Compose project, with the two nginx files
+above next to it:
+
+```
+.
+├── compose.yaml
+├── cache.example.com.conf
+├── proxy-params.conf
+└── certs/
+    ├── cache.example.com.pem
+    └── cache.example.com.key
+```
+
+```yaml
+services:
+  yocache-ci:
+    image: ghcr.io/bmoczulski/yocache:latest
+    restart: unless-stopped
+    environment:
+      YOCACHE_HASHEQUIV_ADDR: ""            # raw TCP can't go through the proxy
+      YOCACHE_TRUSTED_PROXY: 172.30.0.10    # nginx, below
+    volumes:
+      - yocache-ci-data:/var/lib/yocache
+    networks: [yocache]
+
+  yocache-dev:
+    image: ghcr.io/bmoczulski/yocache:latest
+    restart: unless-stopped
+    environment:
+      YOCACHE_HASHEQUIV_ADDR: ""
+      YOCACHE_TRUSTED_PROXY: 172.30.0.10
+    volumes:
+      - yocache-dev-data:/var/lib/yocache
+    networks: [yocache]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on: [yocache-ci, yocache-dev]
+    ports:
+      - "443:443"
+    volumes:
+      - ./cache.example.com.conf:/etc/nginx/conf.d/cache.example.com.conf:ro
+      - ./proxy-params.conf:/etc/nginx/snippets/proxy-params.conf:ro
+      - ./certs:/etc/ssl:ro
+    networks:
+      yocache:
+        ipv4_address: 172.30.0.10           # fixed, so YoCache can trust it
+
+networks:
+  yocache:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  yocache-ci-data:
+  yocache-dev-data:
+```
+
+The YoCache containers publish no ports, so builders can only reach them
+through nginx. The service names `yocache-ci` and `yocache-dev` are the
+hostnames the nginx snippet proxies to.
+
+The fixed subnet is there so `YOCACHE_TRUSTED_PROXY` can name nginx's
+address. Pick one that's free on the Docker host: VPN clients and company
+networks often claim parts of `172.16.0.0/12` or `10.0.0.0/8`, and a clash
+makes the published port silently unreachable from the host.
+
 ### Why each setting matters
 
 - **`client_max_body_size 0`**: nginx's default limit is 1 MB, and it rejects
