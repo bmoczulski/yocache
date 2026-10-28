@@ -6,6 +6,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Unreleased
 
 ### Added
+- `--trusted-proxy` server flag (`YOCACHE_TRUSTED_PROXY`): behind those
+  reverse proxies, log lines name the client from `X-Forwarded-For` instead
+  of the proxy's address.
 - Docs: running YoCache behind a reverse proxy with HTTPS, with a tested
   nginx configuration and how to use a private CA.
 

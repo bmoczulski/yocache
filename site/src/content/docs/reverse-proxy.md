@@ -41,6 +41,7 @@ proxy_http_version 1.1;                           # needed for WebSocket
 proxy_set_header Upgrade    $http_upgrade;        # pass the WebSocket upgrade
 proxy_set_header Connection $connection_upgrade;
 proxy_set_header Host $host;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # see below
 proxy_request_buffering off;                      # stream uploads through
 ```
 
@@ -104,6 +105,23 @@ connection stays unencrypted; TCP has no paths to route by, so each instance
 needs its own port; and YoCache sees the relay's address, not the
 builder's.
 
+## Client addresses in logs
+
+Behind a proxy, every request reaches YoCache from the proxy's address, so
+that's what its log lines show (`remote=…`). To have them name the builder
+instead, forward the client address (the `X-Forwarded-For` line in the
+snippet above) and tell YoCache which proxies to believe:
+
+```sh
+yocache --trusted-proxy 10.0.0.5     # or YOCACHE_TRUSTED_PROXY=10.0.0.5
+```
+
+YoCache reads `X-Forwarded-For` only on connections from a trusted proxy,
+and takes the last address in it that isn't one of your trusted proxies. A
+client can't fake its address by sending the header itself: directly, the
+header is ignored, and through the proxy, anything the client put in front
+is skipped.
+
 ## Private or self-signed certificates
 
 If the proxy's certificate isn't from a public CA, the build host has to
@@ -149,5 +167,3 @@ certificate without them.
   the whole archive is sent before YoCache gets to refuse it. Uploads stay
   correct; they just cost more bandwidth when several builders upload the
   same objects.
-- **Logs show the proxy's address.** YoCache doesn't read `X-Forwarded-For`,
-  so its log lines (`remote=…`) name the proxy, not the builder.

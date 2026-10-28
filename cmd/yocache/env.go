@@ -17,8 +17,9 @@ const envPrefix = "YOCACHE_"
 // Every other flag's env var is passed through unsplit, since a scalar value
 // like --data-dir may legitimately contain a comma.
 var multiValueFlags = map[string]bool{
-	"evict":        true,
-	"block-recipe": true,
+	"evict":         true,
+	"block-recipe":  true,
+	"trusted-proxy": true,
 }
 
 // applyEnvDefaults lets YOCACHE_<FLAG> env vars set flag defaults before CLI

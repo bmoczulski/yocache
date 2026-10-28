@@ -86,6 +86,8 @@ func main() {
 		blockListRecipes = append(blockListRecipes, v)
 		return nil
 	})
+	var trusted trustedProxies
+	flag.Func("trusted-proxy", "`CIDR` or address of a reverse proxy whose X-Forwarded-For header names the real client; repeat to add more", trusted.add)
 	if err := applyEnvDefaults(flag.CommandLine); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -440,7 +442,10 @@ func main() {
 		log.Error("gzhttp wrapper init", "err", err)
 		os.Exit(1)
 	}
-	compressed := gzWrap(mux)
+	compressed := withForwardedClient(trusted, gzWrap(mux))
+	if len(trusted) > 0 {
+		log.Info("trusting X-Forwarded-For from reverse proxies", "proxies", fmt.Sprint(trusted))
+	}
 
 	srv := &http.Server{
 		Addr: *addr,
