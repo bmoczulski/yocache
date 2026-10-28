@@ -61,14 +61,17 @@ type outhashRecord struct {
 // hashEquiv is the WebSocket handler that serves the OEHASHEQUIV protocol over
 // the SQLite-backed store (hashequiv_store.go).
 type hashEquiv struct {
-	store  *hashEquivStore
-	log    *slog.Logger
-	ledger *Ledger
-	stats  hashEquivRequestStats
+	store    *hashEquivStore
+	log      *slog.Logger
+	ledger   *Ledger
+	stats    hashEquivRequestStats
+	commands map[string]heqCommand
 }
 
 func newHashEquiv(store *hashEquivStore, log *slog.Logger, ledger *Ledger) *hashEquiv {
-	return &hashEquiv{store: store, log: log, ledger: ledger}
+	h := &hashEquiv{store: store, log: log, ledger: ledger}
+	h.commands = h.commandTable()
+	return h
 }
 
 // heqTransport is the send/recv contract serve/dispatch/handle* need from a
@@ -212,30 +215,17 @@ func (h *hashEquiv) dispatch(c heqTransport, msg map[string]json.RawMessage) err
 	if _, ok := msg["exists-stream"]; ok {
 		return h.handleStream(c, h.existsStream)
 	}
-	for _, command := range []string{"get", "get-outhash", "report", "report-equiv", "ping", "get-stats"} {
-		if _, ok := msg[command]; ok {
-			started := time.Now()
-			defer func() { h.stats.add(time.Since(started).Seconds()) }()
-			break
+	for cmd, raw := range msg {
+		handler, ok := h.commands[cmd]
+		if !ok {
+			continue
 		}
-	}
-	if _, ok := msg["get-stats"]; ok {
-		return c.sendMessage(map[string]any{"requests": h.stats.snapshot()})
-	}
-	if raw, ok := msg["get"]; ok {
-		return h.handleGet(c, raw)
-	}
-	if raw, ok := msg["get-outhash"]; ok {
-		return h.handleGetOuthash(c, raw)
-	}
-	if raw, ok := msg["report"]; ok {
-		return h.handleReport(c, raw)
-	}
-	if raw, ok := msg["report-equiv"]; ok {
-		return h.handleReportEquiv(c, raw)
-	}
-	if _, ok := msg["ping"]; ok {
-		return c.sendMessage(map[string]any{"alive": true})
+		// Every recognized command is a request sample, as in bitbake's
+		// dispatch_message; streams are sampled per line in handleStream.
+		started := time.Now()
+		err := c.sendMessage(handler(raw))
+		h.stats.add(time.Since(started).Seconds())
+		return err
 	}
 
 	var cmd string
@@ -245,6 +235,31 @@ func (h *hashEquiv) dispatch(c heqTransport, msg map[string]json.RawMessage) err
 	}
 	h.log.Warn("hashequiv: unrecognized command", "cmd", cmd)
 	return c.sendMessage(invokeErr(fmt.Errorf("Unrecognized command %q", cmd)))
+}
+
+// heqCommand handles one non-stream command and returns the reply to send.
+type heqCommand func(raw json.RawMessage) any
+
+// commandTable maps each non-stream command to its handler. dispatch both
+// routes and times through it, so a command added here is counted by
+// get-stats without a second list to keep in sync.
+func (h *hashEquiv) commandTable() map[string]heqCommand {
+	return map[string]heqCommand{
+		"get":          h.handleGet,
+		"get-outhash":  h.handleGetOuthash,
+		"report":       h.handleReport,
+		"report-equiv": h.handleReportEquiv,
+		"ping":         h.handlePing,
+		"get-stats":    h.handleGetStats,
+	}
+}
+
+func (h *hashEquiv) handlePing(json.RawMessage) any {
+	return map[string]any{"alive": true}
+}
+
+func (h *hashEquiv) handleGetStats(json.RawMessage) any {
+	return map[string]any{"requests": h.stats.snapshot()}
 }
 
 // handleStream mirrors bb.asyncrpc._stream_handler: ack with a JSON-quoted "ok"
@@ -310,55 +325,55 @@ func (h *hashEquiv) existsStream(line string) string {
 	return "false"
 }
 
-func (h *hashEquiv) handleGet(c heqTransport, raw json.RawMessage) error {
+func (h *hashEquiv) handleGet(raw json.RawMessage) any {
 	var req struct {
 		Taskhash string `json:"taskhash"`
 		Method   string `json:"method"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return c.sendMessage(invokeErr(err))
+		return invokeErr(err)
 	}
 	u, ok, err := h.store.getEquivalent(req.Method, req.Taskhash)
 	if err != nil {
 		h.log.Warn("hashequiv: get lookup failed", "err", err, "method", req.Method)
-		return c.sendMessage(nil) // degrade to a miss; the build recomputes
+		return nil // degrade to a miss; the build recomputes
 	}
 	if !ok {
-		return c.sendMessage(nil) // JSON null — bitbake's "no result"
+		return nil // JSON null — bitbake's "no result"
 	}
-	return c.sendMessage(map[string]any{
+	return map[string]any{
 		"method":   req.Method,
 		"taskhash": req.Taskhash,
 		"unihash":  u,
-	})
+	}
 }
 
-func (h *hashEquiv) handleGetOuthash(c heqTransport, raw json.RawMessage) error {
+func (h *hashEquiv) handleGetOuthash(raw json.RawMessage) any {
 	var req struct {
 		Method   string `json:"method"`
 		Outhash  string `json:"outhash"`
 		Taskhash string `json:"taskhash"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return c.sendMessage(invokeErr(err))
+		return invokeErr(err)
 	}
 	rec, ok, err := h.store.getOuthash(req.Method, req.Outhash)
 	if err != nil {
 		h.log.Warn("hashequiv: get-outhash lookup failed", "err", err, "method", req.Method)
-		return c.sendMessage(nil)
+		return nil
 	}
 	if !ok {
-		return c.sendMessage(nil)
+		return nil
 	}
-	return c.sendMessage(map[string]any{
+	return map[string]any{
 		"method":   rec.Method,
 		"outhash":  rec.Outhash,
 		"taskhash": rec.Taskhash,
 		"unihash":  rec.Unihash,
-	})
+	}
 }
 
-func (h *hashEquiv) handleReport(c heqTransport, raw json.RawMessage) error {
+func (h *hashEquiv) handleReport(raw json.RawMessage) any {
 	var req struct {
 		Method   string `json:"method"`
 		Taskhash string `json:"taskhash"`
@@ -366,7 +381,7 @@ func (h *hashEquiv) handleReport(c heqTransport, raw json.RawMessage) error {
 		Unihash  string `json:"unihash"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return c.sendMessage(invokeErr(err))
+		return invokeErr(err)
 	}
 	if err := h.store.insertOuthash(outhashRecord{
 		Method:   req.Method,
@@ -403,21 +418,21 @@ func (h *hashEquiv) handleReport(c heqTransport, raw json.RawMessage) error {
 		"taskhash", short(req.Taskhash),
 		"unihash", short(unihash))
 	h.ledger.RecordHashEquivSet(req.Method, req.Taskhash, unihash, "")
-	return c.sendMessage(map[string]any{
+	return map[string]any{
 		"taskhash": req.Taskhash,
 		"method":   req.Method,
 		"unihash":  unihash,
-	})
+	}
 }
 
-func (h *hashEquiv) handleReportEquiv(c heqTransport, raw json.RawMessage) error {
+func (h *hashEquiv) handleReportEquiv(raw json.RawMessage) any {
 	var req struct {
 		Method   string `json:"method"`
 		Taskhash string `json:"taskhash"`
 		Unihash  string `json:"unihash"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return c.sendMessage(invokeErr(err))
+		return invokeErr(err)
 	}
 	unihash, err := h.store.insertUnihash(req.Method, req.Taskhash, req.Unihash)
 	if err != nil {
@@ -425,11 +440,11 @@ func (h *hashEquiv) handleReportEquiv(c heqTransport, raw json.RawMessage) error
 		unihash = req.Unihash
 	}
 	h.ledger.RecordHashEquivSet(req.Method, req.Taskhash, unihash, "")
-	return c.sendMessage(map[string]any{
+	return map[string]any{
 		"taskhash": req.Taskhash,
 		"method":   req.Method,
 		"unihash":  unihash,
-	})
+	}
 }
 
 // validProtoVersion mirrors hashserv ServerClient.validate_proto_version:
