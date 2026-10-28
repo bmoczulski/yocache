@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- Docs: running YoCache behind a reverse proxy with HTTPS, with a tested
+  nginx configuration and how to use a private CA.
+
 ### Fixed
 - The default `BB_HASHSERVE` now follows `YOCACHE_URL`'s scheme and path:
   `https://proxy/cache1` gives `wss://proxy/cache1/hashequiv`. It used to be

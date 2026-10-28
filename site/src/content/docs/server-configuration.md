@@ -70,7 +70,8 @@ proxy that strips a path prefix — e.g. several instances at
 `https://proxy/cache1/`, `https://proxy/cache2/` via Traefik's `stripPrefix`.
 Link to the prefix with its trailing slash (`/cache1/`): from a bare
 `/cache1` the browser resolves the relative redirect to `/ui/`, outside the
-prefix.
+prefix. See [Behind a reverse proxy](../reverse-proxy/) for a complete proxy
+setup, HTTPS included.
 
 For the build-side knobs, see
 [Client configuration](../client-configuration/).
