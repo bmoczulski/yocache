@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.15 - 2026-10-28
+
 ### Added
 - `--trusted-proxy` server flag (`YOCACHE_TRUSTED_PROXY`): behind those
   reverse proxies, log lines name the client from `X-Forwarded-For` instead
