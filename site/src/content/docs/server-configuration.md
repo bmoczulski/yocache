@@ -66,6 +66,8 @@ byte share. It's a Svelte SPA compiled into the binary — no separate web
 host, no configuration flag, no way to disable it in this release. Root
 `/` returns a 301 to `/ui/` where the dashboard lives.
 
+![The YoCache dashboard: a ring chart of how the stored bytes split between downloads and sstate, and totals for downloads, sstate (files and recipes) and hash-equivalence entries.](../../assets/dashboard.png)
+
 The dashboard uses only relative URLs, so it also works behind a reverse
 proxy that strips a path prefix — e.g. several instances at
 `https://proxy/cache1/`, `https://proxy/cache2/` via Traefik's `stripPrefix`.
