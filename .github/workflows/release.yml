@@ -92,6 +92,8 @@ jobs:
           ref: ${{ needs.bump-version.outputs.tag }}
           fetch-depth: 0
       - name: Build release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ needs.bump-version.outputs.tag }}"
           previous="${{ needs.bump-version.outputs.previous_tag }}"
@@ -100,6 +102,23 @@ jobs:
             grab && /^## / { exit }
             grab { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          # Credit first-time contributors. Only GitHub's own generated notes
+          # know who they are; take just their "New Contributors" section (the
+          # rest repeats the changelog). Cosmetic, so a failure only warns.
+          if generated=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+                -f tag_name="$tag" ${previous:+-f previous_tag_name="$previous"} \
+                -q .body); then
+            newcomers=$(printf '%s\n' "$generated" | awk '
+              /^## New Contributors/ { grab=1 }
+              grab && /^\*\*Full Changelog/ { exit }
+              grab { print }
+            ')
+            if [ -n "$newcomers" ]; then
+              printf '\n%s\n' "$newcomers" >> "$RUNNER_TEMP/release-notes.md"
+            fi
+          else
+            echo "::warning::Could not generate GitHub release notes; releasing without the New Contributors section."
+          fi
           if [ -n "$previous" ]; then
             {
               echo ""
