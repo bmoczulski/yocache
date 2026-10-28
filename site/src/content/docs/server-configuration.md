@@ -50,11 +50,12 @@ fewer than two samples).
 
 These statistics aggregate completed hash-equivalence requests across all
 connections and both transports, including individual stream messages and
-their `END` markers. Idle time waiting for requests is excluded. The response
-does not include the current `get-stats` request, which is counted once it
-finishes. Statistics are held in memory and start from zero on server restart;
-they are separate from the persistent cache inventory at `/api/stats`.
-The `reset-stats` command is not supported.
+their `END` markers. Idle time waiting for requests is excluded, and so is
+time spent sending a command's reply (stream lines include it, as in BitBake).
+The response does not include the current `get-stats` request, which is
+counted once it finishes. Statistics are held in memory and start from zero on
+server restart; they are separate from the persistent cache inventory at
+`/api/stats`. The `reset-stats` command is not supported.
 
 ## Web dashboard
 

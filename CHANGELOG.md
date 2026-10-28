@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+- Hash-equivalence `get-stats` no longer counts the time spent sending a
+  command's reply, matching BitBake's server, so a slow client connection no
+  longer inflates the reported request times.
+
 ## v0.1.14 - 2026-10-28
 
 ### Added

@@ -222,10 +222,12 @@ func (h *hashEquiv) dispatch(c heqTransport, msg map[string]json.RawMessage) err
 		}
 		// Every recognized command is a request sample, as in bitbake's
 		// dispatch_message; streams are sampled per line in handleStream.
+		// The clock stops before the reply is sent: bitbake times only the
+		// handler, and asyncrpc writes the response after dispatch returns.
 		started := time.Now()
-		err := c.sendMessage(handler(raw))
+		reply := handler(raw)
 		h.stats.add(time.Since(started).Seconds())
-		return err
+		return c.sendMessage(reply)
 	}
 
 	var cmd string

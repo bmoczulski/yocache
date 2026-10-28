@@ -152,3 +152,29 @@ func TestHashEquivGetStats(t *testing.T) {
 		})
 	}
 }
+
+// slowSendConn is a transport whose replies take a long time to write, to
+// tell handler time apart from send time.
+type slowSendConn struct{ delay time.Duration }
+
+func (slowSendConn) recv() (string, error)                            { return "", nil }
+func (slowSendConn) send(string) error                                { return nil }
+func (slowSendConn) recvMessage() (map[string]json.RawMessage, error) { return nil, nil }
+func (c slowSendConn) sendMessage(any) error                          { time.Sleep(c.delay); return nil }
+
+// A slow reply write must not count towards the request time, matching
+// bitbake, which times the handler and sends the response afterwards.
+func TestHashEquivStatsExcludeReplySend(t *testing.T) {
+	h := newTestHashEquiv(t)
+	const delay = 50 * time.Millisecond
+	if err := h.dispatch(slowSendConn{delay}, map[string]json.RawMessage{"ping": nil}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.stats.snapshot()
+	if got.Num != 1 {
+		t.Fatalf("num = %d, want 1", got.Num)
+	}
+	if got.TotalTime >= delay.Seconds() {
+		t.Fatalf("total_time = %gs, includes the %v reply send", got.TotalTime, delay)
+	}
+}
