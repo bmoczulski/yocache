@@ -99,6 +99,13 @@ both for a cold tree and for a warm one you don't want to disturb.
 
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/).
   Keep them small and surgical. No emojis.
+- **Commit messages explain *why*.** The diff already shows what changed and
+  how; use the message for the motivation, the trade-off, or the constraint
+  that isn't visible in the code.
+- **Linear history only — no merge commits.** Pull requests are merged with
+  "Rebase and merge", and `main` rejects merge commits. To update your branch,
+  rebase it onto `main` (`git rebase origin/main`) rather than merging `main`
+  into it.
 - **Telemetry must never break a build.** In the bbclass, every network or
   parse failure is caught and downgraded to `bb.warn`; keep it that way.
   Likewise on the server, ledger and inventory failures are logged, never

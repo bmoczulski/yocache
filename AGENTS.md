@@ -241,16 +241,24 @@ missing: `./goreleaser check` or `./goreleaser release --snapshot --clean`).
 - The bbclass is deliberately scaffolding: synchronous per-event POSTs mean
   hundreds-to-thousands of requests per build. Batching is required before this
   is enabled on large builds — don't treat the current shape as the target.
-- Commits: Conventional Commits, no emojis, no `Co-authored-by`; keep them small
-  and surgical (see the global instructions).
+- **Commits**: Conventional Commits, no emojis; keep them small and surgical,
+  split larger changes into several commits that are each easy to reason about.
+- **Commit messages explain *why*.** The diff already shows what changed and
+  how; the message is for the motivation, the trade-off, or the constraint that
+  isn't visible in the code. Describe the how only when it's clever or
+  non-obvious enough to need it.
+- **Linear history only — no merge commits.** PRs land with GitHub's "Rebase
+  and merge" (the only merge method enabled), and `main` rejects merge commits
+  (ruleset: required linear history). Bring a branch up to date with
+  `git rebase`, never `git merge main`.
 - **Reference issues and PRs with colon-form trailers** in the commit footer:
   `Fixes: #N` (GitHub closes it when the commit lands on `main`) or `Refs: #N`
   (link only), never the colon-less `Fixes #N`. The colon form is at once a
   Conventional Commits footer, a git trailer (`git interpret-trailers --parse`
   ignores `Fixes #N`), and a GitHub closing keyword. Issues and PRs share one
   number space per repo, so `#N` is unambiguous; use `Refs: #N` for past PRs
-  too. PRs are merged only with GitHub's "rebase and merge" (never squash), so
-  history carries no `(#N)` subject suffix.
+  too. Since PRs land by rebase, history carries no `(#N)` subject suffix;
+  GitHub's own PR link on each commit is the provenance record.
 - **Every user-facing change needs a `CHANGELOG.md` entry** under `##
   Unreleased`, in the same commit/PR as the change — this is what the release
   workflow turns into GitHub Release notes (see "Release automation" above). A
