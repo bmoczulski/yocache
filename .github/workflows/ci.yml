@@ -24,3 +24,32 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" \
             -v "$PWD":/workspace -w /workspace yocache-dev \
             sh -c 'go build ./cmd/... && go vet ./cmd/... && go test -race ./cmd/...'
+
+  changelog:
+    # Mirrors release.yml's gate, but on the PR: a push to main that ships
+    # something fails the release outright without an Unreleased entry, and
+    # by then the PR is already merged.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a CHANGELOG.md Unreleased entry
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Same paths release.yml ignores: changes only there don't release.
+          if git diff --quiet "$BASE"...HEAD -- . \
+              ':(exclude,glob)**/*.md' ':(exclude)notes' ':(exclude)site'; then
+            echo "Docs-only change, no CHANGELOG entry needed."
+            exit 0
+          fi
+          unreleased() {
+            awk '/^## Unreleased$/ { grab=1; next } grab && /^## / { exit } grab { print }'
+          }
+          if [ "$(git show "$BASE":CHANGELOG.md | unreleased)" = "$(unreleased < CHANGELOG.md)" ]; then
+            echo "::error file=CHANGELOG.md::Add an entry under '## Unreleased' describing this change; the release notes are built from it."
+            exit 1
+          fi
