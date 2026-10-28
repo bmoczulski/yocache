@@ -11,7 +11,7 @@ opt-outs and tuning knobs with working defaults.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `YOCACHE_URL` | `http://localhost:6768` | Where your YoCache server lives. The layer wires bitbake's download and sstate mirrors to it and enables automatic uploads. |
+| `YOCACHE_URL` | `http://localhost:6768` | Where your YoCache server lives. The layer wires bitbake's download and sstate mirrors to it and enables automatic uploads. May be `https://` and include a path, e.g. `https://proxy.example.com/cache1` for a server behind a reverse proxy. |
 | `BB_HASHSERVE` | derived from `YOCACHE_URL` | The layer points bitbake's hash-equivalence at YoCache automatically: `ws://<host>/hashequiv` on Yocto ≥ Scarthgap, or the raw-TCP listener (`<host>:6767`) on older releases whose bitbake has no `ws://` client. Set it yourself in `local.conf`/`site.conf` to override (e.g. to use a different hash-equivalence server than your YoCache server). |
 | `YOCACHE_SKIP_FETCH_TYPES` | *(empty)* | Artifact types **not** to fetch from the cache: `sstate`, `downloads`, or `all`. With `all` the build never reads from YoCache but still uploads — a populate-only mode. |
 | `YOCACHE_SKIP_UPLOAD_TYPES` | *(empty)* | Artifact types **not** to upload: `sstate`, `downloads`, or `all`. With `all` the build only consumes the cache, never feeds it. |

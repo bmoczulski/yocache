@@ -269,7 +269,11 @@ class Uploader:
             _warn("cannot stat %s: %s" % (path, exc))
             return
 
-        req_path = "/%s/%s" % (kind, quoted_name)
+        # Keep YOCACHE_URL's own path: behind a reverse proxy the server may
+        # live under a prefix (https://proxy/cache1), and dropping it would
+        # send the upload to whatever the proxy serves at its root.
+        prefix = urllib.parse.urlsplit(self.base_url).path.rstrip("/")
+        req_path = "%s/%s/%s" % (prefix, kind, quoted_name)
         hdrs = {
             "Content-Type": "application/octet-stream",
             "Content-Length": str(size),

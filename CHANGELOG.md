@@ -6,6 +6,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Unreleased
 
 ### Fixed
+- Uploads now keep a path prefix in `YOCACHE_URL` (e.g.
+  `https://proxy/cache1`). They used to go to the proxy's root, so a build
+  behind a prefix-stripping reverse proxy uploaded nothing.
 - The dashboard now works behind a reverse proxy that strips a path prefix
   (e.g. `https://proxy/cache1/` forwarded as `/`): the root redirect, asset
   links, and API calls are all relative, so they keep the prefix instead of
