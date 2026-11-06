@@ -6,9 +6,9 @@ description: Answers on Yocto release compatibility, sstate and downloads storag
 ## Which Yocto releases does it work with?
 
 The `meta-yocache` layer declares compatibility with every release from
-**dunfell** through the current **wrynose** (dunfell, gatesgarth, hardknott,
+**dunfell** through the current **blacksail** (dunfell, gatesgarth, hardknott,
 honister, kirkstone, langdale, mickledore, nanbield, scarthgap, styhead,
-walnascar, wrynose). Dunfell, kirkstone, and wrynose are build-tested
+walnascar, wrynose, blacksail). Dunfell, kirkstone, and wrynose are build-tested
 end-to-end; the releases in between share the same code paths as one of
 those three, so they're covered too. The hash-equivalence integration is
 enabled automatically and works on every supported release: bitbake's
