@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+- `meta-yocache` declares `blacksail` (Yocto 6.1) in
+  `LAYERSERIES_COMPAT_yocache`. OE-core master also reports `blacksail`
+  until it moves to the next codename, so master builds parse again too.
+
 ## v0.1.15 - 2026-10-28
 
 ### Added
