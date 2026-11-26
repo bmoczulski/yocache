@@ -65,15 +65,6 @@
         )} recipes
       </dd>
     </div>
-    <div>
-      <dt>hash-equiv</dt>
-      <dd>{humanCount(stats.hashequiv_unihashes)} unihashes</dd>
-      <dd class="muted">
-        {humanCount(stats.hashequiv_taskhashes)} taskhashes · {humanCount(
-          stats.hashequiv_outhashes,
-        )} outhashes
-      </dd>
-    </div>
   </dl>
 </section>
 

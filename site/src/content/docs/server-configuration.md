@@ -57,17 +57,19 @@ time spent sending a command's reply (stream lines include it, as in BitBake).
 The response does not include the current `get-stats` request, which is
 counted once it finishes. Statistics are held in memory and start from zero on
 server restart; they are separate from the persistent cache inventory at
-`/api/stats`. The `reset-stats` command is not supported.
+`/api/stats`. The `reset-stats` command is not supported. The
+[web dashboard](#web-dashboard) shows them too, asking `/hashequiv` itself.
 
 ## Web dashboard
 
 Point a browser at the server (e.g. `http://yourcache.local:6768/`) to
 see a live dashboard of the same data, plus a pie chart of blob-store
-byte share. It's a Svelte SPA compiled into the binary — no separate web
-host, no configuration flag, no way to disable it in this release. Root
-`/` returns a 301 to `/ui/` where the dashboard lives.
+byte share and the [hash-equivalence request
+statistics](#hash-equivalence-request-statistics). It's a Svelte SPA compiled
+into the server binary and available under the `/ui/` path — no separate web
+host needed.
 
-![The YoCache dashboard: a ring chart of how the stored bytes split between downloads and sstate, and totals for downloads, sstate (files and recipes) and hash-equivalence entries.](../../assets/dashboard.png)
+![The YoCache dashboard: a ring chart of how the stored bytes split between downloads and sstate with their totals (files and recipes), and a hash-equivalence panel with stored unihashes, request count and average latency.](../../assets/dashboard.png)
 
 The dashboard uses only relative URLs, so it also works behind a reverse
 proxy that strips a path prefix — e.g. several instances at

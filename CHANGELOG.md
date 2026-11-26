@@ -18,6 +18,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `get-outhash`.
 - Evicting an sstate archive moves its hash-equivalence entries to an
   equivalent archive that is still cached, instead of dropping them.
+- The dashboard has a hash-equivalence panel: stored unihashes, how many
+  taskhashes resolved to an equivalent one, and the request count and
+  latency from `get-stats`.
 
 ### Changed
 - Hash equivalence moved to bitbake's `outhashes_v2` layout, keeping every

@@ -1,14 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchStats, fetchVersion, type Stats, type VersionInfo } from './lib/api';
+  import { fetchHashEquivStats, type HashEquivRequestStats } from './lib/hashequiv';
   import StoragePanel from './panels/StoragePanel.svelte';
+  import HashEquivPanel from './panels/HashEquivPanel.svelte';
   import logo from './assets/yocache-avatar.svg';
 
   let stats = $state<Stats | null>(null);
   let version = $state<VersionInfo | null>(null);
   let error = $state<string | null>(null);
+  let heRequests = $state<HashEquivRequestStats | null>(null);
+  let heRequestsError = $state<string | null>(null);
 
   onMount(async () => {
+    // Separate from the page-level load: a missing hash-equivalence endpoint
+    // (--hash-equivalence off) shouldn't blank the rest of the dashboard.
+    fetchHashEquivStats().then(
+      (r) => (heRequests = r),
+      (e) => (heRequestsError = e instanceof Error ? e.message : String(e)),
+    );
     try {
       const [s, v] = await Promise.all([fetchStats(), fetchVersion()]);
       stats = s;
@@ -39,6 +49,7 @@
     <p class="error">Failed to load: {error}</p>
   {:else if stats}
     <StoragePanel {stats} />
+    <HashEquivPanel {stats} requests={heRequests} requestsError={heRequestsError} />
   {:else}
     <p class="muted">Loading…</p>
   {/if}
