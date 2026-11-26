@@ -298,6 +298,56 @@ YOCACHE_UPLOAD_LOG_LEVEL ??= "quiet"
 BB_GENERATE_MIRROR_TARBALLS ??= "1"
 BB_GENERATE_SHALLOW_TARBALLS ??= "1"
 
+# The uninative shim is fetched by uninative.bbclass in its own BuildStarted
+# handler, not by any recipe's do_fetch, so yocache_notify_dl never sees it.
+# Upload it under the "uninative/<chksum>/<tarball>" name that
+# uninative.bbclass's own premirror entry looks it up by. Runs in the cooker,
+# next to the uploader, so it queues directly with submit() instead of going
+# through the socket. Every later build re-submits once; the server answers
+# with a cheap 412 skip.
+#
+# One attempt per build, claimed first thing: this is called on every
+# heartbeat, so every call after the first must cost next to nothing (one
+# uncontended lock and a set lookup). One attempt is enough even when it
+# finds nothing: the shim can only appear during BuildStarted, which is over
+# before the first heartbeat.
+def _yocache_notify_uninative(d):
+    from yocache import uploader
+    if not uploader.claim_once("uninative"):
+        return
+    import os
+    if not bb.data.inherits_class("uninative", d):
+        return
+    chksum = d.getVarFlag("UNINATIVE_CHECKSUM", d.getVar("BUILD_ARCH"))
+    tarball = d.getVar("UNINATIVE_TARBALL")
+    dldir = d.getVar("UNINATIVE_DLDIR")
+    if not (chksum and tarball and dldir):
+        return
+    # May be a symlink to wherever the fetcher stored it (see
+    # uninative.bbclass); isfile() and the uploader's open() follow it.
+    path = os.path.join(dldir, chksum, tarball)
+    if os.path.isfile(path):
+        uploader.submit("downloads", path, "uninative/%s/%s" % (chksum, tarball),
+                        {"sha256": chksum})
+
+# When to call it: as early as possible, without touching INHERIT order. Our
+# BuildStarted handler runs before uninative's (a local.conf INHERIT lands
+# ahead of INHERIT_DISTRO), so the shim isn't there yet at that point. The
+# cooker enables HeartbeatEvent only after every BuildStarted handler has
+# returned, and uninative fetches synchronously inside its own, so the first
+# heartbeat (BB_HEARTBEAT_EVENT, 1s by default) already finds it on disk.
+# yocache_build_lifecycle retries at BuildCompleted for a build too short to
+# see a heartbeat. Everything is caught: an exception escaping a heartbeat
+# handler makes bitbake's server idle loop quit.
+python yocache_uninative_upload () {
+    try:
+        _yocache_notify_uninative(e.data)
+    except Exception as exc:
+        bb.note("yocache: uninative upload notify failed: %s" % exc)
+}
+addhandler yocache_uninative_upload
+yocache_uninative_upload[eventmask] = "bb.event.HeartbeatEvent"
+
 python yocache_build_lifecycle () {
     import json
     import urllib.parse
@@ -389,6 +439,12 @@ python yocache_build_lifecycle () {
     # before teardown (critical in a kas-container, which exits at build end and
     # would otherwise kill in-flight uploads).
     if isinstance(e, bb.event.BuildCompleted):
+        try:
+            # Fallback for a build that ended before its first heartbeat
+            # (see yocache_uninative_upload); a no-op if that already ran.
+            _yocache_notify_uninative(d)
+        except Exception as exc:
+            bb.warn("yocache: uninative upload notify failed: %s" % exc)
         try:
             from yocache import uploader
             uploader.stop(d)

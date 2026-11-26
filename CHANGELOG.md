@@ -6,6 +6,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Unreleased
 
 ### Added
+- The uninative shim (`x86_64-nativesdk-libc-*.tar.xz`) is cached too, so a
+  new build directory no longer downloads it from yoctoproject.org.
 - `--hash-equivalence on|off|only` (`YOCACHE_HASH_EQUIVALENCE`): `on`
   (default) ties hash equivalence to the sstate stored on this server, `off`
   turns it off, `only` serves hash equivalence alone, for sstate kept

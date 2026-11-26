@@ -120,6 +120,7 @@ class Uploader:
         self.verbose = verbose
         self.state = IDLE
         self._queue = queue.Queue()
+        self._claimed = set()  # claim_once() tags, reset per build
         self._lsock = None
         self._accept_thread = None
         self._workers = []
@@ -378,6 +379,40 @@ def stop(d):
             _uploader.stop()
         except Exception as exc:
             _warn("error stopping uploader: %s" % exc)
+
+
+def submit(kind, path, name, checksums=None, recipe_meta=None):
+    """Cooker-side: queue one artifact on the running uploader directly.
+
+    For code that already runs in the cooker (event handlers), where a
+    socket notify() would race the uploader's own stop(): the connection can
+    still be sitting in the listen backlog, unaccepted, when stop() closes
+    the socket, and the kernel then drops it. Queued items are always
+    drained by stop(). Returns False if no uploader is running.
+    """
+    with _lock:
+        if _uploader is None or _uploader.state != RUNNING:
+            return False
+        _uploader._queue.put((kind, path, name, checksums or {}, recipe_meta or {}))
+        return True
+
+
+def claim_once(tag):
+    """True the first time tag is claimed during this build, False after.
+
+    A one-shot guard for cooker code that fires repeatedly (a heartbeat
+    handler) but needs to act once per build. It is cheap on purpose: one
+    uncontended lock and a set lookup. Claims live on the running Uploader,
+    so they reset with every build. False if no uploader is running, since
+    there would be nowhere to upload to anyway.
+    """
+    with _lock:
+        if _uploader is None or _uploader.state != RUNNING:
+            return False
+        if tag in _uploader._claimed:
+            return False
+        _uploader._claimed.add(tag)
+        return True
 
 
 # -- module-level API (worker hooks) --------------------------------------
