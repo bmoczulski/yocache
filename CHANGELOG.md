@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.1.17 - 2026-11-26
+
 ### Added
 - The uninative shim (`x86_64-nativesdk-libc-*.tar.xz`) is cached too, so a
   new build directory no longer downloads it from yoctoproject.org.
