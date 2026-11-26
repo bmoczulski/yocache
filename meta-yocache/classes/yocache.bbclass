@@ -47,15 +47,6 @@ def _yocache_hashserve_default(d):
 
 BB_HASHSERVE ??= "${@_yocache_hashserve_default(d)}"
 
-# All replacements defined in build_mirroruris() in bitbake/lib/bb/fetch2/__init__.py
-#   TYPE       origud.type        e.g. git / https / crate / gitsm
-#   HOST       origud.host        e.g. git.openembedded.org
-#   PATH       origud.path        leading-slash repo/file path
-#   BASENAME   path.split('/')[-1]
-#   MIRRORNAME host+path flattened (':'->'.', '/'->'.', '*'->'.')
-# YOCACHE_URL_REPLACEMENTS = "type=TYPE/host=HOST/mirrorname=MIRRORNAME/basename=BASENAME/path=PATH/"
-YOCACHE_URL_REPLACEMENTS = "PATH"
-
 # --- DL (downloads) + sstate mirror wiring --------------------------------
 # Composed once here; the inc files below use them via ${...} expansion so the
 # URL is not repeated per-protocol. Direct PREMIRRORS prepend avoids touching
@@ -75,8 +66,38 @@ def _yocache_identity_prefix(d):
             parts += [key, val]
     return "/".join(parts) + "/" if parts else ""
 
-YOCACHE_DL_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}downloads/${YOCACHE_URL_REPLACEMENTS}"
-YOCACHE_SS_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}sstate/${YOCACHE_URL_REPLACEMENTS};downloadfilename=PATH"
+#
+# Downloads are a flat namespace, like any Yocto source mirror (an rsync'd
+# DL_DIR, downloads.yoctoproject.org/mirror/sources): the replacement ends in
+# "/" with no PATH, and bitbake's uri_replace() appends the basename it would
+# store locally — the localpath basename, or the git2_*/gitshallow_* mirror
+# tarball name for a VCS source. That is exactly the name yocache_notify_dl
+# uploads under, so lookup and upload agree without re-implementing
+# uri_replace() here. Do not add PATH back: it nests the lookup under the
+# upstream path (downloads/gnu/tar/tar-1.35.tar.bz2) so it never matches the
+# upload, and it mangles uninative.bbclass's own premirror, which appends
+# "/uninative/<chksum>/<tarball>" to our replacement.
+#
+# sstate, by contrast, really is nested (<hash[:2]>/<hash[2:4]>/<file>), so its
+# mirror keeps PATH.
+#
+# Future idea, kept on purpose: bitbake can put more than PATH into a mirror
+# URL. All replacements defined in build_mirroruris() in
+# bitbake/lib/bb/fetch2/__init__.py:
+#   TYPE       origud.type        e.g. git / https / crate / gitsm
+#   HOST       origud.host        e.g. git.openembedded.org
+#   PATH       origud.path        leading-slash repo/file path
+#   BASENAME   path.split('/')[-1]
+#   MIRRORNAME host+path flattened (':'->'.', '/'->'.', '*'->'.')
+# e.g. "type=TYPE/host=HOST/mirrorname=MIRRORNAME/basename=BASENAME/path=PATH/"
+# Embedded in the downloads URL as /key=value/ segments ahead of the flat
+# basename (the replacement still ends in "/", so uri_replace() still appends
+# it), they would tell the server where each download came from upstream, worth
+# recording in the db. That only works once the server strips such segments
+# off before resolving the blob name, the way parseIdentityPath strips the
+# /machine/<m>/ prefix. Until then they would break the flat lookup.
+YOCACHE_DL_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}downloads/"
+YOCACHE_SS_URL = "${YOCACHE_URL}/${@_yocache_identity_prefix(d)}sstate/PATH;downloadfilename=PATH"
 
 def _yocache_skip_fetch(d, kind):
     types = (d.getVar("YOCACHE_SKIP_FETCH_TYPES") or "").split()

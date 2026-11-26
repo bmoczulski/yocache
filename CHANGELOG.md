@@ -23,6 +23,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   automatically at startup; downgrading is supported.
 
 ### Fixed
+- Uploaded source downloads are served back: bitbake looked them up under
+  the upstream path (`gnu/tar/…`) while they were stored flat, so every one
+  missed. Downloads already cached start hitting without migration.
 - No more sstate re-check avalanche: hash equivalence no longer answers with
   a unihash whose sstate archive is missing. Each such answer made bitbake
   re-check the sstate mirror for everything downstream of that task (another
